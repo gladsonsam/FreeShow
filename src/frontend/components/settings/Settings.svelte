@@ -7,6 +7,7 @@
     import Tip from "../main/Tip.svelte"
     import SmartSettings from "../../ai/components/settings/SmartSettings.svelte"
     import AudioRouting from "./tabs/AudioRouting.svelte"
+    import AutoLyrics from "./tabs/AutoLyrics.svelte"
     import Connection from "./tabs/Connection.svelte"
     import Files from "./tabs/Files.svelte"
     import FilesButtons from "./tabs/FilesButtons.svelte"
@@ -93,6 +94,8 @@
             <Theme />
         {:else if tabId === "ai"}
             <SmartSettings />
+        {:else if tabId === "auto_lyrics"}
+            <AutoLyrics />
         {:else if tabId === "other"}
             <Other />
         {/if}

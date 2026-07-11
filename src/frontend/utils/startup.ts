@@ -5,6 +5,7 @@ import { Main } from "../../types/IPC/Main"
 import { checkStartupActions } from "../components/actions/actions"
 import { getTimeFromInterval } from "../components/helpers/time"
 import { requestMain, requestMainMultiple, sendMain, sendMainMultiple } from "../IPC/main"
+import { autoLyricsController } from "../audio/lyrics/autoLyricsController"
 import { cameraManager } from "../media/cameraManager"
 import { activePopup, activeProfile, alertMessage, cachePath, cloudSyncData, contentProviderData, currentWindow, dataPath, deviceId, driveKeys, isDev, loaded, loadedState, os, profiles, providerConnections, shows, special, version, windowState } from "../stores"
 import { startTracking } from "./analytics"
@@ -68,6 +69,8 @@ async function startupMain() {
     else autoOpenLastUsedProfile()
 
     storeSubscriber()
+    // enable auto lyrics detection if it was turned on (won't load the model unless enabled)
+    if (get(special).autoLyrics?.enabled) autoLyricsController.applySettings(get(special).autoLyrics)
     remoteListen()
 
     const hasProfiles = Object.keys(get(profiles)).filter((a) => a !== "admin").length > 0
