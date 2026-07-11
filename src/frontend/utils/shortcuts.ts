@@ -5,6 +5,7 @@ import type { ShowType } from "../../types/Show"
 import type { DrawerTabIds, TopViews } from "../../types/Tabs"
 import { clearAudio } from "../audio/audioFading"
 import { AudioPlayer } from "../audio/audioPlayer"
+import { autoLyricsController } from "../audio/lyrics/autoLyricsController"
 import { runActionId } from "../components/actions/actions"
 import { menuClick } from "../components/context/menuClick"
 import { createScriptureShow } from "../components/drawer/bible/scripture"
@@ -21,7 +22,7 @@ import { importFromClipboard } from "../converters/importHelpers"
 import { addSection } from "../converters/project"
 import { requestMain, sendMain } from "../IPC/main"
 import { changeSlidesView } from "../show/slides"
-import { activeDrawerTab, activeEdit, activeFocus, activePage, activePopup, activeProject, activeStage, alertMessage, contextActive, drawer, focusedArea, focusMode, guideActive, media, os, outLocked, outputs, projects, quickSearchActive, refreshEditSlide, selected, showRecentlyUsedProjects, special, spellcheck, styles, textEditActive, timelineRecordingAction, topContextActive, videosData, volume } from "../stores"
+import { activeDrawerTab, activeEdit, activeFocus, activePage, activePopup, activeProject, activeStage, alertMessage, autoLyrics, contextActive, drawer, focusedArea, focusMode, guideActive, media, os, outLocked, outputs, projects, quickSearchActive, refreshEditSlide, selected, showRecentlyUsedProjects, special, spellcheck, styles, textEditActive, timelineRecordingAction, topContextActive, videosData, volume } from "../stores"
 import { audioExtensions, imageExtensions, videoExtensions } from "../values/extensions"
 import { drawerTabs } from "../values/tabs"
 import { activeShow } from "./../stores"
@@ -151,6 +152,15 @@ export function keydown(e: KeyboardEvent) {
     }
 
     if (get(guideActive)) return
+
+    // accept an auto-lyrics suggestion with Tab (only when one is showing, otherwise Tab behaves normally)
+    const editingElement = document.activeElement as HTMLElement | null
+    const isTyping = editingElement?.closest(".edit, .editItem") || editingElement?.tagName === "INPUT" || editingElement?.tagName === "TEXTAREA"
+    if (e.key === "Tab" && get(autoLyrics).suggestion && get(special).autoLyrics?.mode !== "auto" && !isTyping) {
+        e.preventDefault()
+        autoLyricsController.confirmSuggestion()
+        return
+    }
 
     // clicking e.g. "Show" tab button will focus that making number tab change not work
     if (document.activeElement?.nodeName === "BUTTON") (document.activeElement as any).blur()

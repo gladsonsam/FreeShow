@@ -7,6 +7,7 @@
     import { getContrast } from "./components/helpers/color"
     import { getBlending } from "./components/helpers/output"
     import { checkTimers, startEventTimer, startTimer } from "./components/helpers/timerTick"
+    import LyricsSuggestionOverlay from "./components/output/LyricsSuggestionOverlay.svelte"
     import Loader from "./components/main/Loader.svelte"
     import ProgressPanel from "./components/main/ProgressPanel.svelte"
     import MenuBar from "./components/main/MenuBar.svelte"
@@ -84,6 +85,7 @@
             <Popup />
             <QuickSearch />
             <Toast />
+            <LyricsSuggestionOverlay />
             <StatusIndicator />
             <Recorder />
             <Guide />

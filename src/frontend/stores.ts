@@ -222,6 +222,9 @@ export const usageLog: Writable<any> = writable({ all: [] })
 export const shows: Writable<TrimmedShows> = writable({}) // {default}
 export const showsCache: Writable<Shows> = writable({}) // {default}
 export const textCache: Writable<any> = writable({}) // {}
+
+// AUTO LYRICS (volatile runtime state - settings live in "special.autoLyrics")
+export const autoLyrics: Writable<import("./audio/lyrics/types").AutoLyricsRuntime> = writable({ status: "off", lastTranscript: "", suggestion: null })
 export const groups: Writable<ShowGroups> = writable({}) // {default}
 export const categories: Writable<Categories> = writable({}) // {default}
 export const transitionData: Writable<{ text: Transition; media: Transition }> = writable({
