@@ -1,7 +1,7 @@
 <script lang="ts">
     import type { Show } from "../../../types/Show"
     import { getQuickExample } from "../../converters/txt"
-    import { activePopup, textEditActive, textEditZoom } from "../../stores"
+    import { textEditActive, textEditZoom } from "../../stores"
     import { transposeText } from "../../utils/chordTranspose"
     import { newToast } from "../../utils/common"
     import Icon from "../helpers/Icon.svelte"
@@ -10,7 +10,7 @@
     import MaterialZoom from "../inputs/MaterialZoom.svelte"
     import { formatText } from "./formatTextEditor"
     import { getPlainEditorText } from "./getTextEditor"
-    import Notes from "./tools/Notes.svelte"
+    import TextEditorInput from "./TextEditorInput.svelte"
 
     export let currentShow: Show | undefined
 
@@ -20,12 +20,6 @@
     $: hasLockedSlide = Object.values(currentShow?.slides || {}).some((a) => a?.locked)
     $: isLocked = currentShow?.locked || hasLockedSlide
     $: if (isLocked) newToast("output.state_locked")
-
-    // Ctrl+F in shortcuts.ts does not get triggered when a text input is active, so we trigger from here as well
-    function keydown(e: any) {
-        if (!e.ctrlKey && !e.metaKey) return
-        if (e.key === "f") activePopup.set("find_replace")
-    }
 
     // transpose chords
     function transposeUp() {
@@ -38,7 +32,7 @@
     $: showHasChords = Object.values(currentShow?.slides || {}).find((a) => a?.items?.find((a) => a.lines?.find((a) => a.chords)))
 </script>
 
-<Notes class="context #editbox_text" disabled={isLocked} style="padding: 30px;font-size: {$textEditZoom / 8}em;" placeholder={getQuickExample()} value={text} on:change={(e) => formatText(e.detail)} on:keydown={keydown} />
+<TextEditorInput value={text} placeholder={getQuickExample()} disabled={isLocked} fontSize={$textEditZoom / 8} on:change={(e) => formatText(e.detail)} />
 
 <FloatingInputs arrow let:open>
     <MaterialZoom hidden={!open} columns={$textEditZoom / 10} min={0.5} max={2} defaultValue={1} addValue={-0.1} on:change={(e) => textEditZoom.set(e.detail * 10)} />
