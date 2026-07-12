@@ -266,13 +266,10 @@
     let replaceShown = false
     let findQuery = ""
     let replaceQuery = ""
-    let caseSensitive = false
-    let regexMode = false
-    let wholeWord = false
     let findInput: HTMLInputElement
     let activeMatchIndex = 0
 
-    $: options = { caseSensitive, regex: regexMode, wholeWord } as SearchOptions
+    const options: SearchOptions = { caseSensitive: false, regex: false, wholeWord: false }
     $: matches = findOpen && findQuery ? findMatches(lines, findQuery, options) : ([] as Match[])
     $: if (activeMatchIndex > matches.length - 1) activeMatchIndex = Math.max(0, matches.length - 1)
     $: activeStart = matches[activeMatchIndex]?.globalStart ?? -1
@@ -409,7 +406,7 @@
         {/if}
 
         <div class="te-layer te-syntaxlayer" aria-hidden="true" bind:this={syntaxLayer}>
-            {#each syntaxLines as line, i}
+            {#each syntaxLines as line}
                 <div class="te-row">
                     <span class="te-content">{@html line}</span>
                 </div>
@@ -440,29 +437,25 @@
         {#if findOpen}
             <div class="te-find">
                 <div class="te-find-row">
+                    <button class="te-expand" title={translateText(replaceShown ? "actions.hide_replace" : "actions.show_replace")} on:click={() => (replaceShown = !replaceShown)}>
+                        <Icon id={replaceShown ? "down" : "arrow_right"} size={0.9} white />
+                    </button>
                     <input
                         bind:this={findInput}
                         bind:value={findQuery}
                         on:input={onQueryChange}
                         on:keydown={onFindKeydown}
-                        class:invalid={regexMode && findQuery && !matches.length}
                         placeholder={translateText("actions.find")}
                     />
                     <span class="te-count">{matches.length ? `${activeMatchIndex + 1}/${matches.length}` : findQuery ? translateText("actions.no_results") : ""}</span>
-                    <button class="te-toggle" class:active={caseSensitive} title={translateText("actions.case_sensitive")} on:click={() => (caseSensitive = !caseSensitive)}>Aa</button>
-                    <button class="te-toggle" class:active={wholeWord} title={translateText("actions.whole_word")} on:click={() => (wholeWord = !wholeWord)}>|W|</button>
-                    <button class="te-toggle" class:active={regexMode} title={translateText("actions.use_regex")} on:click={() => (regexMode = !regexMode)}>.*</button>
-                    <div class="te-divider"></div>
                     <button title={translateText("actions.previous")} disabled={!matches.length} on:click={() => step(-1)}><Icon id="arrow_up" size={0.9} white /></button>
                     <button title={translateText("actions.next")} disabled={!matches.length} on:click={() => step(1)}><Icon id="arrow_down" size={0.9} white /></button>
-                    <button title={translateText(replaceShown ? "actions.hide_replace" : "actions.show_replace")} on:click={() => (replaceShown = !replaceShown)}>
-                        <Icon id={replaceShown ? "up" : "down"} size={0.9} white />
-                    </button>
                     <button title={translateText("actions.close")} on:click={closeFind}><Icon id="close" size={0.9} white /></button>
                 </div>
 
                 {#if replaceShown}
                     <div class="te-find-row">
+                        <div class="te-expand-spacer"></div>
                         <input bind:value={replaceQuery} on:keydown={onReplaceKeydown} placeholder={translateText("actions.replace")} {disabled} />
                         <button class="te-text-btn" disabled={disabled || !matches.length} on:click={replaceCurrent}>{translateText("actions.replace")}</button>
                         <button class="te-text-btn" disabled={disabled || !matches.length} on:click={replaceAll}>{translateText("actions.replace_all")}</button>
@@ -621,9 +614,6 @@
     .te-find input:focus {
         border-color: var(--secondary);
     }
-    .te-find input.invalid {
-        border-color: #e0554f;
-    }
     .te-count {
         min-width: 52px;
         padding: 0 6px;
@@ -652,22 +642,13 @@
         opacity: 0.35;
         cursor: default;
     }
-    .te-find button.active {
-        color: var(--secondary-text);
-        background-color: var(--secondary);
-    }
-    .te-toggle {
-        font-family: monospace;
-        font-weight: 600;
-        font-size: 0.75rem;
+    .te-expand,
+    .te-expand-spacer {
+        flex: 0 0 20px;
+        width: 20px;
+        min-width: 20px !important;
     }
     .te-text-btn {
         padding: 0 10px !important;
-    }
-    .te-divider {
-        width: 1px;
-        height: 18px;
-        margin: 0 3px;
-        background-color: var(--primary-lighter);
     }
 </style>
