@@ -34,6 +34,9 @@
     $: if (!editing && value !== text) {
         text = value
         committed = value
+        // a different show/text was loaded — the old undo history no longer applies
+        undoStack = []
+        redoStack = []
     }
 
     $: lines = text.split("\n")
@@ -52,6 +55,65 @@
         await tick()
         textarea.focus()
         textarea.setSelectionRange(selStart, selEnd)
+    }
+
+    // --- editor-local undo/redo (isolated from the app's slide history) ---
+    interface Snapshot {
+        content: string
+        start: number
+        end: number
+    }
+    let undoStack: Snapshot[] = []
+    let redoStack: Snapshot[] = []
+    let lastRecordTime = 0
+    let lastRecordCategory = ""
+    const HISTORY_LIMIT = 300
+    const COALESCE_MS = 400
+
+    function snapshot(): Snapshot {
+        return { content: text, start: textarea?.selectionStart ?? text.length, end: textarea?.selectionEnd ?? text.length }
+    }
+
+    // record the state *before* a change; consecutive typing of the same kind is coalesced into one undo step
+    function recordHistory(category: "insert" | "delete" | "op", breakGroup = false) {
+        const now = Date.now()
+        const coalesce = !breakGroup && category !== "op" && category === lastRecordCategory && now - lastRecordTime < COALESCE_MS
+        if (!coalesce) {
+            undoStack.push(snapshot())
+            if (undoStack.length > HISTORY_LIMIT) undoStack.shift()
+            redoStack = []
+        }
+        lastRecordTime = now
+        lastRecordCategory = breakGroup ? "op" : category
+    }
+
+    function onBeforeInput(e: InputEvent) {
+        if (disabled) return
+        const inputType = e.inputType || ""
+        const category = inputType.startsWith("delete") ? "delete" : "insert"
+        const isLineBreak = inputType === "insertLineBreak" || inputType === "insertParagraph"
+        recordHistory(category, isLineBreak)
+    }
+
+    async function applySnapshot(snap: Snapshot) {
+        text = snap.content
+        lastRecordCategory = "op" // start a fresh group after undo/redo
+        await tick()
+        textarea.focus()
+        textarea.setSelectionRange(snap.start, snap.end)
+        syncScroll()
+    }
+
+    function undo() {
+        if (!undoStack.length) return
+        redoStack.push(snapshot())
+        applySnapshot(undoStack.pop()!)
+    }
+
+    function redo() {
+        if (!redoStack.length) return
+        undoStack.push(snapshot())
+        applySnapshot(redoStack.pop()!)
     }
 
     // --- keyboard shortcuts ---
@@ -77,11 +139,32 @@
             return
         }
 
+        // undo / redo — use the editor's own history, never the app's slide history
+        if (ctrl && key.toLowerCase() === "z") {
+            e.preventDefault()
+            e.stopPropagation()
+            if (!disabled) e.shiftKey ? redo() : undo()
+            return
+        }
+        if (ctrl && key.toLowerCase() === "y") {
+            e.preventDefault()
+            e.stopPropagation()
+            if (!disabled) redo()
+            return
+        }
+        // keep Ctrl+A as native "select all text", not the global "select all slides"
+        if (ctrl && !e.shiftKey && !e.altKey && key.toLowerCase() === "a") {
+            e.stopPropagation()
+            return
+        }
+
         if (disabled) return
 
         // transpose chords
         if (ctrl && e.shiftKey && (key === "ArrowUp" || key === "ArrowDown")) {
             e.preventDefault()
+            e.stopPropagation()
+            recordHistory("op", true)
             text = transposeText(text, key === "ArrowUp" ? 1 : -1)
             commit()
             return
@@ -89,6 +172,7 @@
         // move / duplicate current line(s)
         if (e.altKey && (key === "ArrowUp" || key === "ArrowDown")) {
             e.preventDefault()
+            e.stopPropagation()
             if (e.shiftKey) duplicateLines(key === "ArrowUp" ? -1 : 1)
             else moveLines(key === "ArrowUp" ? -1 : 1)
             return
@@ -96,12 +180,14 @@
         // insert / wrap chord brackets
         if (ctrl && key.toLowerCase() === "k") {
             e.preventDefault()
+            e.stopPropagation()
             insertChord()
             return
         }
         // indent / outdent selected lines
         if (key === "Tab") {
             e.preventDefault()
+            e.stopPropagation()
             if (e.shiftKey) indentLines(-1)
             else indentLines(1)
             return
@@ -128,6 +214,7 @@
         if (dir < 0 && startLine === 0) return
         if (dir > 0 && endLine === arr.length - 1) return
 
+        recordHistory("op", true)
         const block = arr.splice(startLine, endLine - startLine + 1)
         const insertAt = dir < 0 ? startLine - 1 : startLine + 1
         arr.splice(insertAt, 0, ...block)
@@ -140,6 +227,7 @@
     function duplicateLines(dir: number) {
         const arr = text.split("\n")
         const { startLine, endLine } = lineBounds()
+        recordHistory("op", true)
         const block = arr.slice(startLine, endLine + 1)
         const insertAt = dir < 0 ? startLine : endLine + 1
         arr.splice(insertAt, 0, ...block)
@@ -152,6 +240,7 @@
     function indentLines(dir: number) {
         const arr = text.split("\n")
         const { startLine, endLine } = lineBounds()
+        recordHistory("op", true)
         const indent = "  "
 
         for (let i = startLine; i <= endLine; i++) {
@@ -166,6 +255,7 @@
     }
 
     function insertChord() {
+        recordHistory("op", true)
         const start = textarea.selectionStart
         const end = textarea.selectionEnd
         if (start !== end) {
@@ -256,6 +346,7 @@
         if (disabled) return
         const match = matches[activeMatchIndex]
         if (!match) return
+        recordHistory("op", true)
         text = replaceRange(text, match.globalStart, match.globalEnd, findQuery, replaceQuery, options)
         commit()
         tick().then(() => {
@@ -268,6 +359,7 @@
         if (disabled) return
         const { result, count } = replaceAllMatches(text, findQuery, replaceQuery, options)
         if (!count) return
+        recordHistory("op", true)
         text = result
         commit()
     }
@@ -338,12 +430,13 @@
         <textarea
             bind:this={textarea}
             bind:value={text}
-            class="te-input context #editbox_text"
+            class="te-input edit context #editbox_text"
             {placeholder}
             {disabled}
             spellcheck="false"
             autocapitalize="off"
             autocomplete="off"
+            on:beforeinput={onBeforeInput}
             on:input={() => syncScroll()}
             on:scroll={syncScroll}
             on:change={commit}
