@@ -123,17 +123,12 @@
         if (ctrl && !e.shiftKey && !e.altKey && key.toLowerCase() === "f") {
             e.preventDefault()
             e.stopPropagation()
-            openFind(false)
-            return
-        }
-        if (ctrl && key.toLowerCase() === "h") {
-            e.preventDefault()
-            e.stopPropagation()
-            openFind(true)
+            openFind()
             return
         }
         if (key === "Escape" && findOpen) {
             e.preventDefault()
+            e.stopPropagation()
             closeFind()
             return
         }
@@ -283,9 +278,7 @@
     $: activeStart = matches[activeMatchIndex]?.globalStart ?? -1
     $: matchesByLine = matches.reduce((map: Record<number, Match[]>, m) => ((map[m.line] ||= []).push(m), map), {})
 
-    async function openFind(withReplace: boolean) {
-        replaceShown = withReplace || replaceShown
-
+    async function openFind() {
         // seed the query from a single-line selection
         if (textarea) {
             const sel = text.slice(textarea.selectionStart, textarea.selectionEnd)
@@ -363,7 +356,9 @@
         commit()
     }
 
+    // keep the global shortcuts (delete, save, etc.) from hijacking typing in the find/replace inputs
     function onFindKeydown(e: KeyboardEvent) {
+        e.stopPropagation()
         if (e.key === "Enter") {
             e.preventDefault()
             step(e.shiftKey ? -1 : 1)
@@ -374,6 +369,7 @@
     }
 
     function onReplaceKeydown(e: KeyboardEvent) {
+        e.stopPropagation()
         if (e.key === "Enter") {
             e.preventDefault()
             if (e.ctrlKey || e.metaKey) replaceAll()
@@ -565,22 +561,19 @@
         background-color: var(--secondary-opacity);
     }
 
-    /* syntax colors */
+    /* syntax colors — no font-weight/width changes, or the transparent textarea's
+       character positions would drift out of sync with the overlay (breaks selection) */
     .te-syntaxlayer :global(.te-chord) {
         color: #4fc3a1;
-        font-weight: 600;
     }
     .te-syntaxlayer :global(.te-group) {
         color: #e0a458;
-        font-weight: 700;
     }
     .te-syntaxlayer :global(.te-meta) {
         color: #8a7fe0;
-        font-weight: 600;
     }
     .te-syntaxlayer :global(.te-bracket) {
         opacity: 0.5;
-        font-weight: 400;
     }
 
     /* search matches */
