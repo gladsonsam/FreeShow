@@ -9,7 +9,6 @@
     export let placeholder = ""
     export let disabled = false
     export let fontSize = 1 // em
-    export let lineNumbers = true
 
     const dispatch = createEventDispatcher()
 
@@ -401,17 +400,12 @@
     }
 </script>
 
-<div class="te-editor" class:disabled class:no-numbers={!lineNumbers} style="font-size: {fontSize}em; --te-sbw: {scrollbarWidth}px;">
+<div class="te-editor" class:disabled style="font-size: {fontSize}em; --te-sbw: {scrollbarWidth}px;">
     <div class="te-area">
-        {#if lineNumbers}
-            <div class="te-gutter-bg" aria-hidden="true"></div>
-        {/if}
-
         {#if matches.length}
             <div class="te-layer te-matchlayer" aria-hidden="true" bind:this={matchLayer}>
                 {#each lines as line, i}
                     <div class="te-row">
-                        {#if lineNumbers}<span class="te-rownum"></span>{/if}
                         <span class="te-content">{@html matchLineHtml(line, matchesByLine[i] || [], activeStart)}</span>
                     </div>
                 {/each}
@@ -421,7 +415,6 @@
         <div class="te-layer te-syntaxlayer" aria-hidden="true" bind:this={syntaxLayer}>
             {#each syntaxLines as line, i}
                 <div class="te-row">
-                    {#if lineNumbers}<span class="te-rownum">{i + 1}</span>{/if}
                     <span class="te-content">{@html line}</span>
                 </div>
             {/each}
@@ -489,8 +482,6 @@
         --te-lh: 1.6;
         --te-pad-y: 14px;
         --te-pad-x: 18px;
-        --te-gutter-w: 2.5ch;
-        --te-gutter-gap: 16px;
 
         position: relative;
         display: flex;
@@ -498,33 +489,16 @@
         width: 100%;
         height: 100%;
         overflow: hidden;
-        font-family: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, "Courier New", monospace;
-    }
-    .te-editor.no-numbers {
-        --te-gutter-w: 0px;
-        --te-gutter-gap: 0px;
     }
     .te-editor.disabled {
         opacity: 0.5;
     }
 
-    /* editor area holds the gutter backdrop, stacked overlays and the textarea */
+    /* editor area holds the stacked overlays and the textarea */
     .te-area {
         position: relative;
         flex: 1;
         overflow: hidden;
-    }
-
-    .te-gutter-bg {
-        position: absolute;
-        top: 0;
-        left: 0;
-        bottom: 0;
-        z-index: 0;
-        width: calc(var(--te-pad-x) + var(--te-gutter-w) + 8px);
-        background-color: var(--primary-darker);
-        border-inline-end: 1px solid var(--primary-lighter);
-        pointer-events: none;
     }
 
     .te-layer,
@@ -546,16 +520,6 @@
     }
     .te-row {
         display: flex;
-    }
-    .te-rownum {
-        flex: 0 0 var(--te-gutter-w);
-        width: var(--te-gutter-w);
-        margin-inline-end: var(--te-gutter-gap);
-        text-align: end;
-        color: var(--text);
-        opacity: 0.4;
-        user-select: none;
-        font-variant-numeric: tabular-nums;
     }
     .te-content {
         flex: 1 1 auto;
@@ -579,7 +543,7 @@
         z-index: 3;
         width: 100%;
         height: 100%;
-        padding: var(--te-pad-y) var(--te-pad-x) var(--te-pad-y) calc(var(--te-pad-x) + var(--te-gutter-w) + var(--te-gutter-gap));
+        padding: var(--te-pad-y) var(--te-pad-x);
         border: none;
         outline: none;
         resize: none;
