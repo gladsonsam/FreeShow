@@ -1,32 +1,32 @@
-// Orchestrates the auto-lyrics feature: mic capture -> transcription -> matching -> action.
+// Orchestrates the auto-lyrics feature: mic capture -> Learn & Follow engine ->
+// decision -> navigation/suggestion.
 //
 // Lifecycle is driven by the "special.autoLyrics" settings (applySettings) and the runtime
-// state is published to the "autoLyrics" store for the UI. Designed to run continuously during
-// a live service without blocking the main thread (inference is offloaded by the engine).
+// state is published to the "autoLyrics" store for the UI. Designed to run continuously
+// during a live service without blocking the main thread.
 
 import { get } from "svelte/store"
-import { newToast } from "../../utils/common"
-import { _show } from "../../components/helpers/shows"
+import { getTextLines } from "../../components/edit/scripts/textStyle"
 import { setOutput } from "../../components/helpers/output"
 import { updateOut } from "../../components/helpers/showActions"
-import { autoLyrics, outLocked, outputs } from "../../stores"
+import { _show } from "../../components/helpers/shows"
+import { newToast } from "../../utils/common"
+import { autoLyrics, outLocked, outputs, shows, showsCache } from "../../stores"
 import { AudioChunker } from "./audioChunker"
-import { FingerprintEngine } from "./FingerprintEngine"
-import { createTranscriber } from "./LyricsTranscriber"
-import { LyricsMatcher } from "./lyricsMatcher"
-import { AUTO_LYRICS_DEFAULTS, type AutoLyricsSettings, type AutoLyricsStatus, type LyricsTranscriber } from "./types"
+import { FollowEngine, type FollowSongContext } from "./followEngine"
+import { hashSongText, songMapStore } from "./songMap"
+import { AUTO_LYRICS_DEFAULTS, type AutoLyricsSettings, type AutoLyricsStatus } from "./types"
 
 class AutoLyricsControllerClass {
     private settings: AutoLyricsSettings = { ...AUTO_LYRICS_DEFAULTS }
     private chunker: AudioChunker | null = null
-    private transcriber: LyricsTranscriber | null = null
-    private matcher = new LyricsMatcher()
-    private fpEngine: FingerprintEngine | null = null
+    private followEngine: FollowEngine | null = null
     private active = false
 
     private selfNavigating = false
     private lastOutIndex: number | null = null
     private lastOutShowId: string | null = null
+    private lastOutLayoutId: string | null = null
     private outputsUnsub: (() => void) | null = null
 
     async applySettings(next: Partial<AutoLyricsSettings> | undefined) {
@@ -38,8 +38,11 @@ class AutoLyricsControllerClass {
             return
         }
 
-        const needsRestart = this.active && (prev.micId !== this.settings.micId || prev.model !== this.settings.model || prev.engine !== this.settings.engine || prev.language !== this.settings.language)
+        const needsRestart = this.active && prev.micId !== this.settings.micId
         if (needsRestart) this.disable()
+
+        // live-tunable settings
+        this.followEngine?.configure({ thresholdPct: this.settings.threshold, leadMs: this.settings.leadMs })
 
         if (!this.active) await this.enable()
     }
@@ -47,15 +50,23 @@ class AutoLyricsControllerClass {
     async enable() {
         if (this.active) return
         this.active = true
-        this.matcher.reset()
         this.setStatus("loading-model")
 
         try {
-            if (this.settings.engine === "fingerprint") {
-                await this.enableFingerprint()
-            } else {
-                await this.enableTranscriber()
-            }
+            cleanupLegacyFingerprints()
+
+            this.followEngine = new FollowEngine()
+            this.followEngine.configure({ thresholdPct: this.settings.threshold, leadMs: this.settings.leadMs })
+            this.followEngine.onDecision((d) => this.handleFollowDecision(d.slideIndex, d.confidence))
+            this.followEngine.onRuntime((r) => autoLyrics.update((s) => ({ ...s, follow: r })))
+
+            this.chunker = new AudioChunker({
+                onBlock: (pcm) => this.followEngine?.handleBlock(pcm),
+                onError: (err) => this.fail(err.message)
+            })
+            await this.chunker.start(this.settings.micId)
+            this.updateSavedSongs()
+
             this.watchNavigation()
             this.setStatus("listening")
         } catch (err) {
@@ -63,71 +74,29 @@ class AutoLyricsControllerClass {
         }
     }
 
-    private async enableTranscriber() {
-        this.transcriber = createTranscriber(this.settings.engine)
-        this.transcriber.onError((err) => this.fail(err.message))
-        this.transcriber.onTranscript((chunk) => this.handleTranscript(chunk.text))
-        await this.transcriber.init({ model: this.settings.model, language: this.settings.language })
-
-        if (!this.transcriber.handlesOwnCapture) {
-            this.chunker = new AudioChunker({
-                onWindow: (pcm, sampleRate) => this.transcriber?.feed(pcm, sampleRate),
-                onError: (err) => this.fail(err.message)
-            })
-            await this.chunker.start(this.settings.micId)
-        }
-        this.transcriber.start()
-    }
-
-    private async enableFingerprint() {
-        this.fpEngine = new FingerprintEngine()
-        this.fpEngine.onDecision((d) => this.handleFingerprintDecision(d.showId, d.slideIndex, d.confidence))
-        this.fpEngine.onScore((score) => autoLyrics.update((s) => (s.fpScore === score ? s : { ...s, fpScore: score })))
-
-        // seed the engine with the current slide so it starts learning immediately
-        const out = this.getActiveOutput()
-        if (out?.slide?.id) {
-            this.fpEngine.reset()
-            this.fpEngine.notifySlide(out.slide.id, out.slide.index ?? 0, performance.now())
-            this.lastOutShowId = out.slide.id
-            this.lastOutIndex = out.slide.index ?? 0
-        }
-        this.updateLearnedCount()
-
-        this.chunker = new AudioChunker({
-            onWindow: (pcm) => {
-                this.fpEngine?.handleChunk(pcm, performance.now())
-                this.updateLearnedCount()
-            },
-            onError: (err) => this.fail(err.message)
-        })
-        await this.chunker.start(this.settings.micId)
-    }
-
     disable() {
         this.active = false
         this.chunker?.stop()
         this.chunker = null
-        this.transcriber?.dispose()
-        this.transcriber = null
-        this.fpEngine = null
+        this.followEngine?.dispose()
+        this.followEngine = null
         this.outputsUnsub?.()
         this.outputsUnsub = null
         this.lastOutIndex = null
         this.lastOutShowId = null
+        this.lastOutLayoutId = null
         this.setStatus("off")
-        autoLyrics.update((s) => ({ ...s, suggestion: null }))
+        autoLyrics.update((s) => ({ ...s, suggestion: null, follow: null }))
     }
 
     private fail(msg: string) {
         console.error("Auto Lyrics:", msg)
         this.chunker?.stop()
         this.chunker = null
-        this.transcriber?.dispose()
-        this.transcriber = null
-        this.fpEngine = null
+        this.followEngine?.dispose()
+        this.followEngine = null
         this.active = false
-        autoLyrics.update((s) => ({ ...s, status: "error", errorMsg: msg, suggestion: null }))
+        autoLyrics.update((s) => ({ ...s, status: "error", errorMsg: msg, suggestion: null, follow: null }))
         newToast("toast.auto_lyrics_error")
     }
 
@@ -135,9 +104,11 @@ class AutoLyricsControllerClass {
         autoLyrics.update((s) => ({ ...s, status, errorMsg: undefined }))
     }
 
-    private updateLearnedCount() {
-        const count = this.fpEngine?.learnedCount ?? 0
-        autoLyrics.update((s) => (s.learnedCount === count ? s : { ...s, learnedCount: count }))
+    private updateSavedSongs() {
+        songMapStore
+            .count()
+            .then((count) => autoLyrics.update((s) => (s.savedSongs === count ? s : { ...s, savedSongs: count })))
+            .catch(() => null)
     }
 
     private getActiveOutput(): { id: string; slide: any } | null {
@@ -148,61 +119,67 @@ class AutoLyricsControllerClass {
         return { id: active[0], slide: (active[1] as any)?.out?.slide }
     }
 
-    private handleTranscript(text: string) {
-        autoLyrics.update((s) => ({ ...s, lastTranscript: text }))
-
+    private buildSongContext(): FollowSongContext | null {
         const out = this.getActiveOutput()
         const slide = out?.slide
-        const decision = this.matcher.evaluate({
-            transcript: text,
-            currentShowId: slide?.id || "",
-            currentLayoutId: slide?.layout || "",
-            currentIndex: slide?.index ?? -1,
-            detectSongSwitch: this.settings.detectSongSwitch,
-            threshold: this.settings.threshold,
-            stableWindows: this.settings.stableWindows,
-            cooldownMs: this.settings.cooldownMs,
-            now: performance.now()
-        })
+        if (!slide?.id) return null
 
-        if (decision.type === "none") return
+        const showId: string = slide.id
+        const show = get(showsCache)[showId]
+        if (!show) return null
 
-        if (decision.type === "different-song") {
-            newToast("toast.auto_lyrics_song_switch")
-            autoLyrics.update((s) => ({ ...s, suggestion: decision }))
-            this.matcher.notifyNavigation(performance.now(), this.settings.cooldownMs)
-            return
-        }
+        const layoutId: string = slide.layout || show.settings?.activeLayout || ""
+        const layoutRef = _show(showId).layouts([layoutId]).ref()[0] || []
+        if (!layoutRef.length) return null
 
-        if (this.settings.mode === "auto") {
-            this.navigateToSlide(decision.showId, slide?.layout || "", decision.slideIndex!)
-            autoLyrics.update((s) => ({ ...s, suggestion: null }))
-        } else {
-            autoLyrics.update((s) => ({ ...s, suggestion: decision }))
+        const texts = layoutRef.map((ref) => getTextLines(show.slides?.[ref.id] || { items: [] }).join("\n"))
+        return {
+            showId,
+            layoutId,
+            slideCount: layoutRef.length,
+            textHash: hashSongText(texts),
+            songName: show.name || (get(shows)[showId] as any)?.name || "",
+            outputIndex: slide.index ?? 0
         }
     }
 
-    private handleFingerprintDecision(showId: string, slideIndex: number, confidence: number) {
-        const out = this.getActiveOutput()
-        const layout = out?.slide?.layout || ""
-        const label = `Slide ${slideIndex + 1}`
-        const suggestion = { type: "same-show-slide" as const, showId, slideIndex, label, confidence }
+    private handleFollowDecision(slideIndex: number, confidence: number) {
+        const showId = this.lastOutShowId
+        const layoutId = this.lastOutLayoutId
+        if (!showId) return
 
         if (this.settings.mode === "auto") {
-            this.navigateToSlide(showId, layout, slideIndex)
+            this.navigateToSlide(showId, layoutId || "", slideIndex)
             autoLyrics.update((s) => ({ ...s, suggestion: null }))
         } else {
+            const suggestion = { showId, slideIndex, label: this.slideLabel(showId, layoutId || "", slideIndex), confidence }
             autoLyrics.update((s) => ({ ...s, suggestion }))
         }
+    }
+
+    private slideLabel(showId: string, layoutId: string, index: number): string {
+        const show = get(showsCache)[showId]
+        const ref = (_show(showId).layouts([layoutId]).ref()[0] || [])[index]
+        const firstLine = ref ? getTextLines(show?.slides?.[ref.id] || { items: [] }).find((l) => !!l) : ""
+        return firstLine || `Slide ${index + 1}`
+    }
+
+    async forgetCurrentSong() {
+        await this.followEngine?.forgetCurrentSong()
+        this.updateSavedSongs()
+    }
+
+    async forgetAllSongs() {
+        if (this.followEngine) await this.followEngine.forgetAllSongs()
+        else await songMapStore.clearAll().catch(() => null)
+        this.updateSavedSongs()
     }
 
     confirmSuggestion() {
         const suggestion = get(autoLyrics).suggestion
         if (!suggestion) return false
-        if (suggestion.type === "same-show-slide" && suggestion.slideIndex !== undefined) {
-            const out = this.getActiveOutput()
-            this.navigateToSlide(suggestion.showId, out?.slide?.layout || "", suggestion.slideIndex)
-        }
+        const out = this.getActiveOutput()
+        this.navigateToSlide(suggestion.showId, out?.slide?.layout || "", suggestion.slideIndex)
         autoLyrics.update((s) => ({ ...s, suggestion: null }))
         return true
     }
@@ -211,11 +188,6 @@ class AutoLyricsControllerClass {
         if (!get(autoLyrics).suggestion) return false
         autoLyrics.update((s) => ({ ...s, suggestion: null }))
         return true
-    }
-
-    clearFingerprints() {
-        this.fpEngine?.clearCurrentShow()
-        this.updateLearnedCount()
     }
 
     private navigateToSlide(showId: string, layoutId: string, index: number) {
@@ -230,7 +202,6 @@ class AutoLyricsControllerClass {
         setOutput("slide", { id: showId, layout, index }, false, outputId)
         updateOut(showId, index, layoutRef, true, outputId)
 
-        this.matcher.notifyNavigation(performance.now(), this.settings.cooldownMs)
         this.lastOutIndex = index
         setTimeout(() => (this.selfNavigating = false), 100)
     }
@@ -241,29 +212,47 @@ class AutoLyricsControllerClass {
             const slide = out?.slide
             const index = slide?.index ?? null
             const showId = slide?.id || ""
-            if (index === null) return
+            const layoutId = slide?.layout || ""
 
-            const slideChanged = index !== this.lastOutIndex || showId !== this.lastOutShowId
+            const songChanged = showId !== this.lastOutShowId || (!!showId && layoutId !== this.lastOutLayoutId)
+            const slideChanged = index !== this.lastOutIndex || songChanged
 
+            // drop any stale suggestion when the operator navigates
             if (slideChanged && !this.selfNavigating) {
-                // notify text matcher to back off
-                this.matcher.notifyNavigation(performance.now(), this.settings.cooldownMs)
-                autoLyrics.update((s) => ({ ...s, suggestion: null }))
+                autoLyrics.update((s) => (s.suggestion ? { ...s, suggestion: null } : s))
             }
 
-            // notify fingerprint engine of every slide change (learns from manual navigation too)
-            if (slideChanged && this.fpEngine && showId) {
-                this.fpEngine.notifySlide(showId, index, performance.now())
-                this.updateLearnedCount()
+            if (this.followEngine) {
+                if (songChanged) {
+                    const ctx = showId ? this.buildSongContext() : null
+                    this.followEngine.setSong(ctx).then(() => this.updateSavedSongs())
+                } else if (slideChanged && index !== null) {
+                    this.followEngine.notifySlide(index, !this.selfNavigating)
+                }
             }
 
             this.lastOutIndex = index
-            this.lastOutShowId = showId
+            this.lastOutShowId = showId || null
+            this.lastOutLayoutId = layoutId || null
         })
     }
 
     isActive() {
         return this.active
+    }
+}
+
+// remove data stored by the old (pre-rework) fingerprint engine
+function cleanupLegacyFingerprints() {
+    try {
+        const stale: string[] = []
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i)
+            if (key && (key.startsWith("fs_fp_") || key.startsWith("fs_fp2_"))) stale.push(key)
+        }
+        stale.forEach((key) => localStorage.removeItem(key))
+    } catch (err) {
+        // localStorage unavailable — nothing to clean
     }
 }
 

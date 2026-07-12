@@ -8,29 +8,37 @@
 
     // only shown in suggest mode (auto mode navigates without asking)
     $: suggestion = $special.autoLyrics?.mode === "auto" ? null : $autoLyrics.suggestion
+
+    // compact live pill so the operator can see the follower working outside settings
+    $: follow = $autoLyrics.status === "listening" ? $autoLyrics.follow : null
+    $: showPill = !!follow && follow.state !== "idle"
 </script>
 
+{#if showPill && follow}
+    <div class="pill" title={follow.songName}>
+        <span class="dot {follow.state}"></span>
+        <span class="state"><T id="settings.auto_lyrics_follow_{follow.state}" /></span>
+        {#if follow.state === "following" || follow.state === "lost"}
+            <span class="detail">{follow.slideIndex + 1}/{follow.slideCount}</span>
+            <span class="confidence">{follow.confidence}%</span>
+        {/if}
+    </div>
+{/if}
+
 {#if suggestion}
-    <div class="suggestion" class:song={suggestion.type === "different-song"}>
+    <div class="suggestion">
         <Icon id="lyrics" size={1.3} white />
         <div class="text">
-            {#if suggestion.type === "same-show-slide"}
-                <span class="title"><T id="settings.auto_lyrics_suggest_slide" /></span>
-                <span class="detail">{translateText("settings.auto_lyrics_slide")} {(suggestion.slideIndex ?? 0) + 1} · {suggestion.label}</span>
-            {:else}
-                <span class="title"><T id="settings.auto_lyrics_suggest_song" /></span>
-                <span class="detail">{suggestion.label}</span>
-            {/if}
+            <span class="title"><T id="settings.auto_lyrics_suggest_slide" /></span>
+            <span class="detail">{translateText("settings.auto_lyrics_slide")} {suggestion.slideIndex + 1} · {suggestion.label}</span>
         </div>
         <span class="confidence">{suggestion.confidence}%</span>
 
-        {#if suggestion.type === "same-show-slide"}
-            <MaterialButton variant="contained" on:click={() => autoLyricsController.confirmSuggestion()}>
-                <Icon id="check" right />
-                <T id="actions.confirm" />
-                <span class="key">Tab</span>
-            </MaterialButton>
-        {/if}
+        <MaterialButton variant="contained" on:click={() => autoLyricsController.confirmSuggestion()}>
+            <Icon id="check" right />
+            <T id="actions.confirm" />
+            <span class="key">Tab</span>
+        </MaterialButton>
         <MaterialButton on:click={() => autoLyricsController.dismissSuggestion()} title="actions.close">
             <Icon id="close" />
         </MaterialButton>
@@ -38,6 +46,47 @@
 {/if}
 
 <style>
+    .pill {
+        position: fixed;
+        bottom: 12px;
+        right: 12px;
+        z-index: 4890;
+
+        display: flex;
+        align-items: center;
+        gap: 7px;
+
+        padding: 4px 10px;
+        background-color: var(--primary-darkest);
+        border: 1px solid var(--primary-lighter);
+        border-radius: 20px;
+        box-shadow: 0 2px 8px rgb(0 0 0 / 0.35);
+        font-size: 0.8em;
+        opacity: 0.92;
+        pointer-events: none;
+    }
+    .pill .state {
+        font-weight: bold;
+    }
+    .pill .detail {
+        opacity: 0.75;
+    }
+    .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+    .dot.learning {
+        background-color: #e0a800;
+    }
+    .dot.following {
+        background-color: #54c469;
+    }
+    .dot.lost {
+        background-color: #888;
+    }
+
     .suggestion {
         position: fixed;
         bottom: 80px;
@@ -58,9 +107,6 @@
 
         max-width: 80vw;
     }
-    .suggestion.song {
-        border-left-color: #e0a800;
-    }
     .text {
         display: flex;
         flex-direction: column;
@@ -68,7 +114,7 @@
     .title {
         font-weight: bold;
     }
-    .detail {
+    .suggestion .detail {
         opacity: 0.8;
         font-size: 0.9em;
         max-width: 40vw;

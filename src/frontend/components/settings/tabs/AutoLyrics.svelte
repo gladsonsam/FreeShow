@@ -34,33 +34,10 @@
         { label: translateText("settings.auto_lyrics_suggest"), value: "suggest" },
         { label: translateText("settings.auto_lyrics_auto"), value: "auto" }
     ]
-    const engineOptions = [
-        { label: translateText("settings.auto_lyrics_engine_fingerprint"), value: "fingerprint" },
-        { label: translateText("settings.auto_lyrics_engine_whisper"), value: "whisper-wasm" },
-        { label: translateText("settings.auto_lyrics_engine_web_speech"), value: "web-speech" }
-    ]
-    const modelOptions = [
-        { label: "Whisper Tiny (~40 MB)", value: "tiny" },
-        { label: "Whisper Base (~75 MB)", value: "base" }
-    ]
-    const languageOptions = [
-        { label: translateText("settings.auto_lyrics_language_auto"), value: "" },
-        { label: "English", value: "en" },
-        { label: "Spanish", value: "es" },
-        { label: "Portuguese", value: "pt" },
-        { label: "French", value: "fr" },
-        { label: "German", value: "de" },
-        { label: "Italian", value: "it" },
-        { label: "Dutch", value: "nl" },
-        { label: "Korean", value: "ko" },
-        { label: "Chinese", value: "zh" },
-        { label: "Hindi", value: "hi" },
-        { label: "Tagalog", value: "tl" }
-    ]
 
-    $: isWebSpeech = settings.engine === "web-speech"
-    $: isFingerprint = settings.engine === "fingerprint"
     $: statusText = translateText(`settings.auto_lyrics_status_${$autoLyrics.status.replace("-", "_")}`)
+    $: follow = $autoLyrics.follow
+    $: followStateText = follow && follow.state !== "idle" ? translateText(`settings.auto_lyrics_follow_${follow.state}`) : ""
 </script>
 
 <MaterialToggleSwitch label="settings.auto_lyrics_enable" checked={settings.enabled} defaultValue={false} on:change={(e) => update("enabled", e.detail)} />
@@ -71,37 +48,33 @@
         {#if $autoLyrics.status === "error" && $autoLyrics.errorMsg}<span class="msg">({$autoLyrics.errorMsg})</span>{/if}
     </div>
 
-    <MaterialDropdown label="settings.auto_lyrics_mode" value={settings.mode} options={modeOptions} on:change={(e) => update("mode", e.detail)} />
-    <MaterialDropdown label="settings.auto_lyrics_engine" value={settings.engine} options={engineOptions} on:change={(e) => update("engine", e.detail)} />
-    {#if isFingerprint}
-        <div class="note"><T id="settings.auto_lyrics_fingerprint_note" /></div>
-        <MaterialDropdown label="settings.auto_lyrics_mic" value={settings.micId} options={micOptions} allowEmpty on:change={(e) => update("micId", e.detail)} />
-        {#if $autoLyrics.status === "listening"}
-            <div class="learned">
-                <T id="settings.auto_lyrics_learned" />: <strong>{$autoLyrics.learnedCount ?? 0}</strong>
-                {#if ($autoLyrics.learnedCount ?? 0) > 0}
-                    <button class="clear-btn" on:click={() => autoLyricsController.clearFingerprints()}><T id="clear.general" /></button>
-                {/if}
-            </div>
-            {#if ($autoLyrics.learnedCount ?? 0) > 0}
-                <div class="fp-score">
-                    <T id="settings.auto_lyrics_match_score" />: <strong>{$autoLyrics.fpScore ?? 0}%</strong>
-                </div>
-            {/if}
-        {/if}
-    {:else if isWebSpeech}
-        <div class="note"><T id="settings.auto_lyrics_web_speech_note" /></div>
-    {:else}
-        <MaterialDropdown label="settings.auto_lyrics_mic" value={settings.micId} options={micOptions} allowEmpty on:change={(e) => update("micId", e.detail)} />
-        <MaterialDropdown label="settings.auto_lyrics_model" value={settings.model} options={modelOptions} on:change={(e) => update("model", e.detail)} />
-        <MaterialDropdown label="settings.auto_lyrics_language" value={settings.language} options={languageOptions} on:change={(e) => update("language", e.detail)} />
-    {/if}
-    <MaterialNumberInput label="settings.auto_lyrics_threshold" value={settings.threshold} defaultValue={AUTO_LYRICS_DEFAULTS.threshold} min={10} max={100} step={5} on:change={(e) => update("threshold", e.detail)} />
-    <MaterialToggleSwitch label="settings.auto_lyrics_detect_song" checked={settings.detectSongSwitch} defaultValue={true} on:change={(e) => update("detectSongSwitch", e.detail)} />
+    <div class="note"><T id="settings.auto_lyrics_follow_note" /></div>
 
-    {#if $autoLyrics.lastTranscript}
-        <div class="transcript"><T id="settings.auto_lyrics_heard" />: <i>{$autoLyrics.lastTranscript}</i></div>
+    <MaterialDropdown label="settings.auto_lyrics_mode" value={settings.mode} options={modeOptions} on:change={(e) => update("mode", e.detail)} />
+    <MaterialDropdown label="settings.auto_lyrics_mic" value={settings.micId} options={micOptions} allowEmpty on:change={(e) => update("micId", e.detail)} />
+    <MaterialNumberInput label="settings.auto_lyrics_lead" value={settings.leadMs} defaultValue={AUTO_LYRICS_DEFAULTS.leadMs} min={-1000} max={2000} step={100} on:change={(e) => update("leadMs", e.detail)} />
+    <MaterialNumberInput label="settings.auto_lyrics_threshold" value={settings.threshold} defaultValue={AUTO_LYRICS_DEFAULTS.threshold} min={10} max={100} step={5} on:change={(e) => update("threshold", e.detail)} />
+
+    {#if follow && follow.state !== "idle"}
+        <div class="live">
+            <span class="dot {follow.state}"></span>
+            <span class="state">{followStateText}</span>
+            {#if follow.songName}<span class="song">{follow.songName}</span>{/if}
+            {#if follow.state === "following" || follow.state === "lost"}
+                <span class="detail">{translateText("settings.auto_lyrics_slide")} {follow.slideIndex + 1}/{follow.slideCount} · {follow.confidence}%</span>
+            {/if}
+        </div>
+        {#if follow.hasMap}
+            <button class="text-btn" on:click={() => autoLyricsController.forgetCurrentSong()}><T id="settings.auto_lyrics_forget_song" /></button>
+        {/if}
     {/if}
+
+    <div class="learned">
+        <T id="settings.auto_lyrics_saved_songs" />: <strong>{$autoLyrics.savedSongs ?? 0}</strong>
+        {#if ($autoLyrics.savedSongs ?? 0) > 0}
+            <button class="text-btn" on:click={() => autoLyricsController.forgetAllSongs()}><T id="settings.auto_lyrics_forget_all" /></button>
+        {/if}
+    </div>
 {/if}
 
 <style>
@@ -120,29 +93,57 @@
         font-weight: normal;
         opacity: 0.7;
     }
-    .transcript {
-        margin-top: 12px;
-        padding: 8px 10px;
-        background-color: rgb(0 0 20 / 0.15);
-        border-radius: 4px;
-        font-size: 0.85em;
-        opacity: 0.8;
-    }
     .note {
         margin-top: 4px;
+        margin-bottom: 8px;
         font-size: 0.82em;
         opacity: 0.6;
         font-style: italic;
     }
+    .live {
+        margin-top: 10px;
+        padding: 8px 10px;
+        background-color: rgb(0 0 20 / 0.15);
+        border-radius: 4px;
+        font-size: 0.88em;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .live .state {
+        font-weight: bold;
+    }
+    .live .song {
+        opacity: 0.85;
+    }
+    .live .detail {
+        opacity: 0.65;
+    }
+    .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        flex-shrink: 0;
+    }
+    .dot.learning {
+        background-color: #e0a800;
+    }
+    .dot.following {
+        background-color: #54c469;
+    }
+    .dot.lost {
+        background-color: #888;
+    }
     .learned {
-        margin-top: 6px;
+        margin-top: 8px;
         font-size: 0.85em;
         opacity: 0.8;
         display: flex;
         align-items: center;
         gap: 10px;
     }
-    .clear-btn {
+    .text-btn {
         background: none;
         border: 1px solid var(--primary-lighter);
         border-radius: 3px;
@@ -151,13 +152,10 @@
         padding: 1px 8px;
         cursor: pointer;
         opacity: 0.7;
+        width: fit-content;
+        margin-top: 6px;
     }
-    .clear-btn:hover {
+    .text-btn:hover {
         opacity: 1;
-    }
-    .fp-score {
-        margin-top: 4px;
-        font-size: 0.82em;
-        opacity: 0.6;
     }
 </style>
