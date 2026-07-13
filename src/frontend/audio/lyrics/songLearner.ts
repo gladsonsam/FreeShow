@@ -46,7 +46,7 @@ export class PassRecorder {
         return this.frameCount >= MIN_FRAMES && this.marks.length >= 2 && this.coveredSlides() >= MIN_SLIDES_COVERED
     }
 
-    toSongMap(meta: { showId: string; layoutId: string; slideCount: number; textHash: string; manualPass: boolean }): SongMap {
+    toSongMap(meta: { showId: string; layoutId: string; slideCount: number; textHash: string; manualPass: boolean; passCount?: number; locked?: boolean }): SongMap {
         return {
             key: songMapKey(meta.showId, meta.layoutId),
             showId: meta.showId,
@@ -59,7 +59,21 @@ export class PassRecorder {
             slideCount: meta.slideCount,
             textHash: meta.textHash,
             recordedAt: Date.now(),
-            manualPass: meta.manualPass
+            manualPass: meta.manualPass,
+            passCount: meta.passCount ?? 1,
+            locked: meta.locked ?? false
         }
     }
+}
+
+// Should a freshly recorded pass replace the stored map?
+// - no stored map: save the first usable pass
+// - locked map: the operator froze the timing, never touch it
+// - otherwise only when the operator had to correct the follower (their timing wins),
+//   and the new pass covers enough of the song that we don't trade a full map for a fragment
+export function shouldReplaceMap(existing: { locked?: boolean; coveredSlides: number } | null, pass: { manualMoves: number; coveredSlides: number }): boolean {
+    if (!existing) return true
+    if (existing.locked) return false
+    if (pass.manualMoves < 2) return false
+    return pass.coveredSlides >= Math.ceil(existing.coveredSlides * 0.6)
 }

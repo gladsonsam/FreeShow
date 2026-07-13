@@ -575,6 +575,7 @@ const popups = [
     //
     { id: "manage_emitters", name: "popup.manage_emitters", icon: "emitter", data: { drawerTab: "actions" } },
     { id: "transition", name: "popup.transition", icon: "transition" },
+    { id: "auto_lyrics", name: "popup.auto_lyrics", icon: "microphone", aliases: ["-Lyrics", "-Follow song"] },
     // CREATE NEW
     { id: "show", name: "new.show", icon: "add", data: { drawerTab: "shows" }, aliases: ["-Create", "-New song", "-New presentation", "-Create song", "-Create presentation", "timer.create"] },
     { id: "action", name: "new.action", icon: "add", data: { drawerTab: "actions" }, aliases: ["-New macro"] },

@@ -156,7 +156,7 @@ export function keydown(e: KeyboardEvent) {
     // accept an auto-lyrics suggestion with Tab (only when one is showing, otherwise Tab behaves normally)
     const editingElement = document.activeElement as HTMLElement | null
     const isTyping = editingElement?.closest(".edit, .editItem") || editingElement?.tagName === "INPUT" || editingElement?.tagName === "TEXTAREA"
-    if (e.key === "Tab" && get(autoLyrics).suggestion && get(special).autoLyrics?.mode !== "auto" && !isTyping) {
+    if (e.key === "Tab" && get(autoLyrics).suggestion && get(special).autoLyrics?.mode !== "auto" && !isTyping && !get(activePopup)) {
         e.preventDefault()
         autoLyricsController.confirmSuggestion()
         return

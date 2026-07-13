@@ -4,7 +4,6 @@
     import Icon from "../helpers/Icon.svelte"
     import MaterialButton from "../inputs/MaterialButton.svelte"
     import Tip from "../main/Tip.svelte"
-    import AutoLyrics from "./tabs/AutoLyrics.svelte"
     import Connection from "./tabs/Connection.svelte"
     import Files from "./tabs/Files.svelte"
     import FilesButtons from "./tabs/FilesButtons.svelte"
@@ -23,6 +22,9 @@
     import ThemeTabs from "./tabs/ThemeTabs.svelte"
 
     $: tabId = $settingsTab
+
+    // a removed tab id can linger in the saved app state (e.g. the old "auto_lyrics" tab)
+    $: if (!["general", "display_settings", "styles", "connection", "files", "profiles", "theme", "other"].includes(tabId)) settingsTab.set("general")
 
     let scrolled = false
     $: if (tabId === null) scrolled = false
@@ -77,8 +79,6 @@
             <Profiles />
         {:else if tabId === "theme"}
             <Theme />
-        {:else if tabId === "auto_lyrics"}
-            <AutoLyrics />
         {:else if tabId === "other"}
             <Other />
         {/if}

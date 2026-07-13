@@ -14,9 +14,9 @@
 
 import { ChromaExtractor, CHROMA_FPS } from "./chromaFeatures"
 import { SongFollower } from "./songFollower"
-import { PassRecorder } from "./songLearner"
+import { PassRecorder, shouldReplaceMap } from "./songLearner"
 import type { SongMap } from "./songMap"
-import { dequantizeChroma, dequantizeEnergy, songMapKey, songMapStore } from "./songMap"
+import { dequantizeChroma, dequantizeEnergy, mapCoveredSlides, songMapKey, songMapStore } from "./songMap"
 
 export interface FollowSongContext {
     showId: string
@@ -36,6 +36,13 @@ export interface FollowRuntime {
     slideCount: number
     confidence: number // 0-100
     hasMap: boolean
+    passSeconds: number // audio recorded in the current pass
+    passUsable: boolean // current pass is good enough to be saved as a map
+}
+
+export interface LearnedEvent {
+    songName: string
+    firstPass: boolean // true = first map for this song, false = timing refined
 }
 
 export interface FollowDecision {
@@ -60,6 +67,7 @@ export class FollowEngine {
     private recorder: PassRecorder | null = null
     private song: FollowSongContext | null = null
     private hasMap = false
+    private mapMeta: { locked: boolean; passCount: number; coveredSlides: number } | null = null
     private songToken = 0
 
     private state: FollowState = "idle"
@@ -73,6 +81,7 @@ export class FollowEngine {
 
     private decisionCb: ((d: FollowDecision) => void) | null = null
     private runtimeCb: ((r: FollowRuntime) => void) | null = null
+    private learnedCb: ((e: LearnedEvent) => void) | null = null
 
     private minConfidence = 0.55
     private leadFrames = Math.round((400 / 1000) * CHROMA_FPS)
@@ -82,6 +91,9 @@ export class FollowEngine {
     }
     onRuntime(cb: (r: FollowRuntime) => void) {
         this.runtimeCb = cb
+    }
+    onLearned(cb: (e: LearnedEvent) => void) {
+        this.learnedCb = cb
     }
 
     configure(opts: { thresholdPct?: number; leadMs?: number }) {
@@ -100,6 +112,7 @@ export class FollowEngine {
         this.followerMarks = []
         this.recorder = null
         this.hasMap = false
+        this.mapMeta = null
         this.extractor.reset()
         this.resetDecisionState()
 
@@ -136,6 +149,7 @@ export class FollowEngine {
             this.followerMarks = map.marks
             this.follower.anchorToSlide(ctx.outputIndex)
             this.hasMap = true
+            this.mapMeta = { locked: !!map.locked, passCount: map.passCount || 1, coveredSlides: mapCoveredSlides(map.marks) }
             this.state = "following"
         } else {
             this.state = "learning"
@@ -225,14 +239,24 @@ export class FollowEngine {
         const recorder = this.recorder
         const song = this.song
         const wasFollowing = !!this.follower
+        const existing = wasFollowing ? this.mapMeta : null
         this.recorder = null
         if (!recorder || !song || !recorder.isUsable()) return
 
-        const replaceWorthy = !wasFollowing || recorder.manualMoves >= 2
-        if (!replaceWorthy) return
+        if (!shouldReplaceMap(existing, { manualMoves: recorder.manualMoves, coveredSlides: recorder.coveredSlides() })) return
 
         try {
-            await songMapStore.put(recorder.toSongMap({ showId: song.showId, layoutId: song.layoutId, slideCount: song.slideCount, textHash: song.textHash, manualPass: !wasFollowing }))
+            await songMapStore.put(
+                recorder.toSongMap({
+                    showId: song.showId,
+                    layoutId: song.layoutId,
+                    slideCount: song.slideCount,
+                    textHash: song.textHash,
+                    manualPass: !wasFollowing,
+                    passCount: (existing?.passCount || 0) + 1
+                })
+            )
+            this.learnedCb?.({ songName: song.songName, firstPass: !wasFollowing })
         } catch (err) {
             console.error("Auto Lyrics: could not save song map", err)
         }
@@ -247,6 +271,11 @@ export class FollowEngine {
             console.error("Auto Lyrics: could not clear song maps", err)
         }
         await this.setSong(ctx)
+    }
+
+    // keep the loaded map's lock state in sync when the operator toggles it in the UI
+    setCurrentMapLocked(locked: boolean) {
+        if (this.mapMeta) this.mapMeta.locked = locked
     }
 
     async forgetCurrentSong() {
@@ -269,6 +298,7 @@ export class FollowEngine {
         this.follower = null
         this.followerMarks = []
         this.recorder = null
+        this.mapMeta = null
         this.state = "idle"
         this.resetDecisionState()
     }
@@ -297,7 +327,9 @@ export class FollowEngine {
             slideIndex: this.follower ? this.follower.slideAt(this.follower.position) : this.lastOutputIndex,
             slideCount: this.song?.slideCount || 0,
             confidence: Math.round(this.lastConfidence * 100),
-            hasMap: this.hasMap
+            hasMap: this.hasMap,
+            passSeconds: this.recorder ? Math.round(this.recorder.frames / CHROMA_FPS) : 0,
+            passUsable: this.recorder?.isUsable() || false
         })
     }
 }

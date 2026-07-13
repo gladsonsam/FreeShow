@@ -1,7 +1,7 @@
 <script lang="ts">
     import type { Output } from "../../../types/Output"
     import type { LayoutRef } from "../../../types/Show"
-    import { activeEdit, activePage, activePopup, activeShow, outLocked, popupData, showsCache } from "../../stores"
+    import { activeEdit, activePage, activePopup, activeShow, autoLyrics, outLocked, popupData, showsCache, special } from "../../stores"
     import Icon from "../helpers/Icon.svelte"
     import { refreshOut, setOutput } from "../helpers/output"
     import { OutputHelper } from "../helpers/OutputHelper"
@@ -51,6 +51,10 @@
     // PLAY OR REFRESH
     $: shouldRefresh = !!(overlayActive || slideActive) // || audioActive || mediaActive
     $: shouldPlay = !!(currentOverlay || currentShow) // || currentAudio || currentMedia
+
+    // auto lyrics
+    $: lyricsOn = !!$special.autoLyrics?.enabled
+    $: lyricsError = lyricsOn && $autoLyrics.status === "error"
 
     function playCurrent(e: any) {
         if (currentOverlay) {
@@ -113,6 +117,18 @@
         }}
     >
         <Icon size={1.2} id="transition" white={!!customTransition} />
+    </MaterialButton>
+
+    <!-- auto lyrics: listen to the band & follow the song -->
+    <MaterialButton
+        title="popup.auto_lyrics"
+        red={lyricsError}
+        on:click={() => {
+            popupData.set({})
+            activePopup.set("auto_lyrics")
+        }}
+    >
+        <Icon size={1.2} id="microphone" white={lyricsOn && !lyricsError} />
     </MaterialButton>
 </span>
 

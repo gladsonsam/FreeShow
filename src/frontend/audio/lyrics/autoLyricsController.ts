@@ -11,11 +11,15 @@ import { setOutput } from "../../components/helpers/output"
 import { updateOut } from "../../components/helpers/showActions"
 import { _show } from "../../components/helpers/shows"
 import { newToast } from "../../utils/common"
+import { translateText } from "../../utils/language"
 import { autoLyrics, outLocked, outputs, shows, showsCache } from "../../stores"
 import { AudioChunker } from "./audioChunker"
 import { FollowEngine, type FollowSongContext } from "./followEngine"
-import { hashSongText, songMapStore } from "./songMap"
+import { hashSongText, songMapKey, songMapStore } from "./songMap"
 import { AUTO_LYRICS_DEFAULTS, type AutoLyricsSettings, type AutoLyricsStatus } from "./types"
+
+const MIC_RETRY_MS = 5000 // reconnect attempt interval after the mic drops
+const SUGGESTION_TTL_MS = 15000 // a suggestion the operator ignores goes stale
 
 class AutoLyricsControllerClass {
     private settings: AutoLyricsSettings = { ...AUTO_LYRICS_DEFAULTS }
@@ -28,6 +32,10 @@ class AutoLyricsControllerClass {
     private lastOutShowId: string | null = null
     private lastOutLayoutId: string | null = null
     private outputsUnsub: (() => void) | null = null
+
+    private reconnectTimer: NodeJS.Timeout | null = null
+    private micErrorToasted = false
+    private suggestionTimer: NodeJS.Timeout | null = null
 
     async applySettings(next: Partial<AutoLyricsSettings> | undefined) {
         const prev = this.settings
@@ -52,30 +60,30 @@ class AutoLyricsControllerClass {
         this.active = true
         this.setStatus("loading-model")
 
-        try {
-            cleanupLegacyFingerprints()
-
-            this.followEngine = new FollowEngine()
-            this.followEngine.configure({ thresholdPct: this.settings.threshold, leadMs: this.settings.leadMs })
-            this.followEngine.onDecision((d) => this.handleFollowDecision(d.slideIndex, d.confidence))
-            this.followEngine.onRuntime((r) => autoLyrics.update((s) => ({ ...s, follow: r })))
-
-            this.chunker = new AudioChunker({
-                onBlock: (pcm) => this.followEngine?.handleBlock(pcm),
-                onError: (err) => this.fail(err.message)
-            })
-            await this.chunker.start(this.settings.micId)
+        this.followEngine = new FollowEngine()
+        this.followEngine.configure({ thresholdPct: this.settings.threshold, leadMs: this.settings.leadMs })
+        this.followEngine.onDecision((d) => this.handleFollowDecision(d.slideIndex, d.confidence))
+        this.followEngine.onRuntime((r) => autoLyrics.update((s) => ({ ...s, follow: r })))
+        this.followEngine.onLearned(({ songName, firstPass }) => {
             this.updateSavedSongs()
+            const key = firstPass ? "toast.auto_lyrics_learned" : "toast.auto_lyrics_refined"
+            newToast(translateText(key) + (songName ? `: ${songName}` : ""))
+        })
 
-            this.watchNavigation()
-            this.setStatus("listening")
-        } catch (err) {
-            this.fail(err instanceof Error ? err.message : String(err))
-        }
+        this.chunker = new AudioChunker({
+            onBlock: (pcm) => this.followEngine?.handleBlock(pcm),
+            onError: (err) => this.handleMicError(err)
+        })
+        this.updateSavedSongs()
+        this.watchNavigation()
+
+        await this.tryStartMic()
     }
 
     disable() {
         this.active = false
+        this.clearReconnect()
+        this.micErrorToasted = false
         this.chunker?.stop()
         this.chunker = null
         this.followEngine?.dispose()
@@ -86,18 +94,60 @@ class AutoLyricsControllerClass {
         this.lastOutShowId = null
         this.lastOutLayoutId = null
         this.setStatus("off")
-        autoLyrics.update((s) => ({ ...s, suggestion: null, follow: null }))
+        this.setSuggestion(null)
+        autoLyrics.update((s) => ({ ...s, follow: null }))
     }
 
-    private fail(msg: string) {
-        console.error("Auto Lyrics:", msg)
+    private async tryStartMic() {
+        const chunker = this.chunker
+        if (!this.active || !chunker) return
+
+        try {
+            await chunker.start(this.settings.micId)
+        } catch (err) {
+            if (this.chunker === chunker) this.handleMicError(err instanceof Error ? err : new Error(String(err)))
+            return
+        }
+
+        // disabled (or restarted with another mic) while the mic was being opened
+        if (!this.active || this.chunker !== chunker) {
+            chunker.stop()
+            return
+        }
+
+        this.clearReconnect()
+        if (this.micErrorToasted) newToast("toast.auto_lyrics_mic_back")
+        this.micErrorToasted = false
+        this.setStatus("listening")
+    }
+
+    // Mic could not start or dropped mid-service. Keep the follow engine (and any
+    // in-progress learning pass) alive and retry — a USB interface coming back should
+    // not require the operator to do anything.
+    private handleMicError(err: Error) {
+        if (!this.active) return
+        console.error("Auto Lyrics:", err)
+
         this.chunker?.stop()
-        this.chunker = null
-        this.followEngine?.dispose()
-        this.followEngine = null
-        this.active = false
-        autoLyrics.update((s) => ({ ...s, status: "error", errorMsg: msg, suggestion: null, follow: null }))
-        newToast("toast.auto_lyrics_error")
+        autoLyrics.update((s) => ({ ...s, status: "error", errorMsg: err.message }))
+        if (!this.micErrorToasted) {
+            newToast("toast.auto_lyrics_error")
+            this.micErrorToasted = true
+        }
+
+        // no permission: retrying would just re-trigger the system prompt
+        if ((err as any)?.name === "NotAllowedError") return
+
+        this.clearReconnect()
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null
+            this.tryStartMic()
+        }, MIC_RETRY_MS)
+    }
+
+    private clearReconnect() {
+        if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+        this.reconnectTimer = null
     }
 
     private setStatus(status: AutoLyricsStatus) {
@@ -150,11 +200,25 @@ class AutoLyricsControllerClass {
 
         if (this.settings.mode === "auto") {
             this.navigateToSlide(showId, layoutId || "", slideIndex)
-            autoLyrics.update((s) => ({ ...s, suggestion: null }))
+            this.setSuggestion(null)
         } else {
-            const suggestion = { showId, slideIndex, label: this.slideLabel(showId, layoutId || "", slideIndex), confidence }
-            autoLyrics.update((s) => ({ ...s, suggestion }))
+            this.setSuggestion({ showId, slideIndex, label: this.slideLabel(showId, layoutId || "", slideIndex), confidence })
         }
+    }
+
+    // Suggestions expire on their own: if the operator ignored it, acting on it a
+    // minute later (possibly during another verse) would be wrong.
+    private setSuggestion(suggestion: { showId: string; slideIndex: number; label: string; confidence: number } | null) {
+        if (this.suggestionTimer) clearTimeout(this.suggestionTimer)
+        this.suggestionTimer = null
+
+        autoLyrics.update((s) => (s.suggestion === suggestion ? s : { ...s, suggestion }))
+        if (!suggestion) return
+
+        this.suggestionTimer = setTimeout(() => {
+            this.suggestionTimer = null
+            autoLyrics.update((s) => (s.suggestion ? { ...s, suggestion: null } : s))
+        }, SUGGESTION_TTL_MS)
     }
 
     private slideLabel(showId: string, layoutId: string, index: number): string {
@@ -169,9 +233,29 @@ class AutoLyricsControllerClass {
         this.updateSavedSongs()
     }
 
+    // Delete one learned song map. If it belongs to the song currently followed,
+    // the engine reloads so it starts learning fresh instead of following a ghost.
+    async forgetSong(showId: string, layoutId: string) {
+        if (this.followEngine && showId === this.lastOutShowId && layoutId === (this.lastOutLayoutId || "")) {
+            await this.followEngine.forgetCurrentSong()
+        } else {
+            await songMapStore.delete(songMapKey(showId, layoutId)).catch(() => null)
+        }
+        this.updateSavedSongs()
+    }
+
+    async setSongLocked(showId: string, layoutId: string, locked: boolean) {
+        await songMapStore.setLocked(songMapKey(showId, layoutId), locked).catch(() => null)
+        if (showId === this.lastOutShowId && layoutId === (this.lastOutLayoutId || "")) this.followEngine?.setCurrentMapLocked(locked)
+    }
+
     async forgetAllSongs() {
         if (this.followEngine) await this.followEngine.forgetAllSongs()
         else await songMapStore.clearAll().catch(() => null)
+        this.updateSavedSongs()
+    }
+
+    refreshSavedSongs() {
         this.updateSavedSongs()
     }
 
@@ -180,13 +264,13 @@ class AutoLyricsControllerClass {
         if (!suggestion) return false
         const out = this.getActiveOutput()
         this.navigateToSlide(suggestion.showId, out?.slide?.layout || "", suggestion.slideIndex)
-        autoLyrics.update((s) => ({ ...s, suggestion: null }))
+        this.setSuggestion(null)
         return true
     }
 
     dismissSuggestion() {
         if (!get(autoLyrics).suggestion) return false
-        autoLyrics.update((s) => ({ ...s, suggestion: null }))
+        this.setSuggestion(null)
         return true
     }
 
@@ -218,8 +302,8 @@ class AutoLyricsControllerClass {
             const slideChanged = index !== this.lastOutIndex || songChanged
 
             // drop any stale suggestion when the operator navigates
-            if (slideChanged && !this.selfNavigating) {
-                autoLyrics.update((s) => (s.suggestion ? { ...s, suggestion: null } : s))
+            if (slideChanged && !this.selfNavigating && get(autoLyrics).suggestion) {
+                this.setSuggestion(null)
             }
 
             if (this.followEngine) {
@@ -239,20 +323,6 @@ class AutoLyricsControllerClass {
 
     isActive() {
         return this.active
-    }
-}
-
-// remove data stored by the old (pre-rework) fingerprint engine
-function cleanupLegacyFingerprints() {
-    try {
-        const stale: string[] = []
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i)
-            if (key && (key.startsWith("fs_fp_") || key.startsWith("fs_fp2_"))) stale.push(key)
-        }
-        stale.forEach((key) => localStorage.removeItem(key))
-    } catch (err) {
-        // localStorage unavailable — nothing to clean
     }
 }
 

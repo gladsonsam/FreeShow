@@ -81,6 +81,7 @@ import UpdateManager from "../components/main/popups/UpdateManager.svelte"
 import Variable from "../components/main/popups/Variable.svelte"
 import { activePopup, popupData } from "../stores"
 import CleaningUtility from "../components/main/popups/CleaningUtility.svelte"
+import AutoLyrics from "../components/main/popups/AutoLyrics.svelte"
 
 export const popups: { [key in Popups]: ComponentType } = {
     initialize: Initialize,
@@ -161,7 +162,8 @@ export const popups: { [key in Popups]: ComponentType } = {
     timecode: Timecode,
     drawer_search_options: DrawerSearchOptions,
     template_info: TemplateInfo,
-    cleaning_utility: CleaningUtility
+    cleaning_utility: CleaningUtility,
+    auto_lyrics: AutoLyrics
 }
 
 export function waitForPopupData(popupId: Popups): Promise<any> {
