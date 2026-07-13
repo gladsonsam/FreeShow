@@ -27,6 +27,8 @@ export interface SongMap {
     textHash: string // invalidate the map when lyrics change
     recordedAt: number
     manualPass: boolean // true = recorded while the operator navigated by hand
+    passCount?: number // times this map has been recorded/refined
+    locked?: boolean // operator locked the timing: never auto-replace
 }
 
 export function songMapKey(showId: string, layoutId: string) {
@@ -109,11 +111,18 @@ export const songMapStore = {
     get(key: string): Promise<SongMap | null> {
         return request<any>("readonly", (s) => s.get(key)).then((v) => v || null)
     },
+    getAll(): Promise<SongMap[]> {
+        return request<any[]>("readonly", (s) => s.getAll()).then((v) => v || [])
+    },
     put(map: SongMap): Promise<void> {
         return request("readwrite", (s) => s.put(map)).then(() => undefined)
     },
     delete(key: string): Promise<void> {
         return request("readwrite", (s) => s.delete(key)).then(() => undefined)
+    },
+    async setLocked(key: string, locked: boolean): Promise<void> {
+        const map = await this.get(key)
+        if (map) await this.put({ ...map, locked })
     },
     count(): Promise<number> {
         return request<number>("readonly", (s) => s.count())
@@ -121,4 +130,9 @@ export const songMapStore = {
     clearAll(): Promise<void> {
         return request("readwrite", (s) => s.clear()).then(() => undefined)
     }
+}
+
+// Which slides a stored map actually has timing for
+export function mapCoveredSlides(marks: SongMark[]): number {
+    return new Set(marks.map((m) => m.slideIndex)).size
 }

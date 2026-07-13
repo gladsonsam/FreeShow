@@ -13,7 +13,7 @@ const TARGET_RATE = 16000
 
 export interface ChunkerCallbacks {
     onBlock: (pcm: Float32Array) => void
-    onError: (err: Error) => void
+    onError: (err: Error) => void // async failure after a successful start (e.g. mic unplugged)
 }
 
 export class AudioChunker {
@@ -25,6 +25,7 @@ export class AudioChunker {
 
     constructor(private callbacks: ChunkerCallbacks) {}
 
+    // Resolves when capturing, throws when the mic could not be opened.
     async start(micId: string) {
         try {
             const audioConstraints: MediaTrackConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
@@ -32,9 +33,13 @@ export class AudioChunker {
             this.stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
         } catch (err: any) {
             if (err?.name === "NotReadableError" || err?.name === "NotAllowedError") sendMain(Main.ACCESS_MICROPHONE_PERMISSION)
-            this.callbacks.onError(err instanceof Error ? err : new Error(String(err)))
-            return
+            throw err instanceof Error ? err : new Error(String(err))
         }
+
+        // a USB interface getting unplugged mid-service ends the track silently
+        this.stream.getAudioTracks().forEach((track) => {
+            track.onended = () => this.callbacks.onError(new Error("Microphone disconnected"))
+        })
 
         this.ctx = new AudioContext({ sampleRate: TARGET_RATE, latencyHint: "interactive" })
         this.source = this.ctx.createMediaStreamSource(this.stream)
@@ -48,6 +53,8 @@ export class AudioChunker {
         this.source.connect(this.processor)
         this.processor.connect(this.silentGain)
         this.silentGain.connect(this.ctx.destination)
+
+        if (this.ctx.state === "suspended") await this.ctx.resume().catch(() => null)
     }
 
     stop() {
@@ -55,7 +62,10 @@ export class AudioChunker {
             this.processor?.disconnect()
             this.silentGain?.disconnect()
             this.source?.disconnect()
-            this.stream?.getTracks().forEach((t) => t.stop())
+            this.stream?.getTracks().forEach((t) => {
+                t.onended = null
+                t.stop()
+            })
             if (this.ctx && this.ctx.state !== "closed") this.ctx.close()
         } catch (err) {
             console.error("AudioChunker stop error", err)

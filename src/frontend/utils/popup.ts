@@ -92,6 +92,7 @@ import NodeOptions from "../components/main/popups/NodeOptions.svelte"
 import { activePopup, popupData } from "../stores"
 import AiModelManager from "../ai/components/popups/AiModelManager.svelte"
 import ManageFonts from "../components/main/popups/ManageFonts.svelte"
+import AutoLyrics from "../components/main/popups/AutoLyrics.svelte"
 
 export const popups: { [key in Popups]: ComponentType } = {
     initialize: Initialize,
@@ -183,7 +184,8 @@ export const popups: { [key in Popups]: ComponentType } = {
     pco_picker: PcoServicePicker,
     sync_folders: SyncFolders,
     node_options: NodeOptions,
-    ai_model_manager: AiModelManager
+    ai_model_manager: AiModelManager,
+    auto_lyrics: AutoLyrics
 }
 
 export function waitForPopupData(popupId: Popups): Promise<any> {

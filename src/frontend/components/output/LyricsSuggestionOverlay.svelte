@@ -1,6 +1,6 @@
 <script lang="ts">
     import { autoLyricsController } from "../../audio/lyrics/autoLyricsController"
-    import { autoLyrics, special } from "../../stores"
+    import { activePopup, autoLyrics, special } from "../../stores"
     import { translateText } from "../../utils/language"
     import Icon from "../helpers/Icon.svelte"
     import T from "../helpers/T.svelte"
@@ -9,20 +9,36 @@
     // only shown in suggest mode (auto mode navigates without asking)
     $: suggestion = $special.autoLyrics?.mode === "auto" ? null : $autoLyrics.suggestion
 
-    // compact live pill so the operator can see the follower working outside settings
+    // compact live pill so the operator can see the follower working (or failing) at a glance
+    $: enabled = !!$special.autoLyrics?.enabled
+    $: hasError = enabled && $autoLyrics.status === "error"
     $: follow = $autoLyrics.status === "listening" ? $autoLyrics.follow : null
-    $: showPill = !!follow && follow.state !== "idle"
+    $: showPill = hasError || (!!follow && follow.state !== "idle")
+
+    function formatTime(totalSeconds: number) {
+        const m = Math.floor(totalSeconds / 60)
+        const s = Math.floor(totalSeconds % 60)
+        return `${m}:${s.toString().padStart(2, "0")}`
+    }
 </script>
 
-{#if showPill && follow}
-    <div class="pill" title={follow.songName}>
-        <span class="dot {follow.state}"></span>
-        <span class="state"><T id="settings.auto_lyrics_follow_{follow.state}" /></span>
-        {#if follow.state === "following" || follow.state === "lost"}
-            <span class="detail">{follow.slideIndex + 1}/{follow.slideCount}</span>
-            <span class="confidence">{follow.confidence}%</span>
+{#if showPill}
+    <button class="pill" title={hasError ? $autoLyrics.errorMsg || "" : follow?.songName} on:click={() => activePopup.set("auto_lyrics")}>
+        {#if hasError}
+            <span class="dot error"></span>
+            <span class="state"><T id="settings.auto_lyrics_status_error" /></span>
+        {:else if follow}
+            <span class="dot {follow.state}"></span>
+            <span class="state"><T id="settings.auto_lyrics_follow_{follow.state}" /></span>
+            {#if follow.state === "learning"}
+                <span class="detail">{formatTime(follow.passSeconds || 0)}</span>
+                {#if follow.passUsable}<Icon id="check" size={0.75} />{/if}
+            {:else if follow.state === "following" || follow.state === "lost"}
+                <span class="detail">{follow.slideIndex + 1}/{follow.slideCount}</span>
+                <span class="confidence">{follow.confidence}%</span>
+            {/if}
         {/if}
-    </div>
+    </button>
 {/if}
 
 {#if suggestion}
@@ -63,7 +79,14 @@
         box-shadow: 0 2px 8px rgb(0 0 0 / 0.35);
         font-size: 0.8em;
         opacity: 0.92;
-        pointer-events: none;
+
+        color: inherit;
+        font-family: inherit;
+        cursor: pointer;
+    }
+    .pill:hover {
+        opacity: 1;
+        border-color: var(--secondary);
     }
     .pill .state {
         font-weight: bold;
@@ -85,6 +108,9 @@
     }
     .dot.lost {
         background-color: #888;
+    }
+    .dot.error {
+        background-color: #ff5050;
     }
 
     .suggestion {

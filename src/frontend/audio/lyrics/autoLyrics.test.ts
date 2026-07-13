@@ -4,7 +4,8 @@
 import { describe, expect, it } from "vitest"
 import { CHROMA_DIM, ChromaExtractor } from "./chromaFeatures"
 import { SongFollower, type FollowerReference } from "./songFollower"
-import { dequantizeChroma, hashSongText, quantizeVec } from "./songMap"
+import { shouldReplaceMap } from "./songLearner"
+import { dequantizeChroma, hashSongText, mapCoveredSlides, quantizeVec } from "./songMap"
 
 const FPS = 10
 
@@ -254,5 +255,39 @@ describe("songMap helpers", () => {
         const b = hashSongText(["amazing grace", "how sweet the sounds"])
         expect(a).not.toBe(b)
         expect(a).toBe(hashSongText(["amazing grace", "how sweet the sound"]))
+    })
+
+    it("counts distinct covered slides from marks", () => {
+        expect(
+            mapCoveredSlides([
+                { frame: 0, slideIndex: 0 },
+                { frame: 100, slideIndex: 1 },
+                { frame: 200, slideIndex: 0 }
+            ])
+        ).toBe(2)
+    })
+})
+
+describe("shouldReplaceMap", () => {
+    it("saves the first usable pass when no map exists", () => {
+        expect(shouldReplaceMap(null, { manualMoves: 0, coveredSlides: 3 })).toBe(true)
+    })
+
+    it("never replaces a locked map, even after many corrections", () => {
+        expect(shouldReplaceMap({ locked: true, coveredSlides: 5 }, { manualMoves: 5, coveredSlides: 5 })).toBe(false)
+    })
+
+    it("keeps the map when the follower needed no (or one) correction", () => {
+        expect(shouldReplaceMap({ coveredSlides: 5 }, { manualMoves: 0, coveredSlides: 5 })).toBe(false)
+        expect(shouldReplaceMap({ coveredSlides: 5 }, { manualMoves: 1, coveredSlides: 5 })).toBe(false)
+    })
+
+    it("replaces after corrections when the new pass covers a comparable share of the song", () => {
+        expect(shouldReplaceMap({ coveredSlides: 5 }, { manualMoves: 2, coveredSlides: 4 })).toBe(true)
+        expect(shouldReplaceMap({ coveredSlides: 5 }, { manualMoves: 2, coveredSlides: 3 })).toBe(true)
+    })
+
+    it("does not trade a full map for a partial pass (operator joined mid-song)", () => {
+        expect(shouldReplaceMap({ coveredSlides: 8 }, { manualMoves: 3, coveredSlides: 2 })).toBe(false)
     })
 })
