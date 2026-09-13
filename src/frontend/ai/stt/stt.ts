@@ -1,5 +1,6 @@
 import { get, writable } from "svelte/store"
 import { Main } from "../../../types/IPC/Main"
+import { MicCapture } from "../../audio/micCapture"
 import { requestMain, sendMain } from "../../IPC/main"
 import { ai } from "../../stores"
 
@@ -11,13 +12,9 @@ export function resolveSttEngine(): string {
 
 type AudioLevelCallback = (level: number) => void
 
+const CONSUMER_ID = "ai-stt"
+
 export class SpeechToText {
-    private static ac: AudioContext | null = null
-    private static stream: MediaStream | null = null
-    private static sourceNode: MediaStreamAudioSourceNode | null = null
-    private static captureNode: AudioWorkletNode | null = null
-    private static analyserNode: AnalyserNode | null = null
-    private static animFrameId: number | null = null
     private static listeners = new Set<AudioLevelCallback>()
 
     private static sessionToken = 0
@@ -64,7 +61,7 @@ export class SpeechToText {
         this.stopCapture()
 
         const savedDeviceId = get(ai).stt?.micDeviceId || ""
-        const deviceId = await this.resolveMicDeviceId(savedDeviceId)
+        const deviceId = await MicCapture.resolveDeviceId(savedDeviceId)
 
         if (token !== this.sessionToken) return { ok: false, aborted: true }
 
@@ -76,23 +73,23 @@ export class SpeechToText {
             }
         }
 
-        const stream = await this.getMicStream(deviceId)
-        if (token !== this.sessionToken) {
-            stream?.getTracks().forEach((track) => track.stop())
-            return { ok: false, aborted: true }
+        try {
+            await MicCapture.acquire(CONSUMER_ID, deviceId, {
+                onBlock: (block) => sendMain(Main.AI_AUDIO_DATA, { buffer: block.bytes }),
+                onLevel: (level) => this.emitAudioLevel(level),
+                onError: (err) => {
+                    console.error("[AI STT]", err)
+                    this.emitAudioLevel(0)
+                }
+            })
+        } catch (err: any) {
+            return { ok: false, error: err?.name === "NotAllowedError" || err?.name === "NotReadableError" ? "No microphone access" : "Could not create audio context" }
         }
-
-        if (!stream) return { ok: false, error: "No microphone access" }
-
-        this.stream = stream
-        const ac = await this.captureAudioContext(stream, token)
 
         if (token !== this.sessionToken) {
             this.stopCapture()
             return { ok: false, aborted: true }
         }
-
-        if (!ac) return { ok: false, error: "Could not create audio context" }
 
         return { ok: true }
     }
@@ -104,121 +101,7 @@ export class SpeechToText {
     }
 
     static async resolveMicDeviceId(saved: string): Promise<string> {
-        try {
-            const devices = await navigator.mediaDevices.enumerateDevices()
-            const inputs = devices.filter((d) => d.kind === "audioinput" && d.deviceId !== "default")
-
-            if (!inputs.length) return saved
-            if (saved && inputs.some((d) => d.deviceId === saved)) return saved
-
-            const virtualDefault = devices.find((d) => d.deviceId === "default")
-            const systemDefault = virtualDefault?.groupId ? inputs.find((d) => d.groupId === virtualDefault.groupId) : undefined
-
-            return systemDefault?.deviceId || inputs[0].deviceId
-        } catch (err) {
-            console.error("Could not enumerate microphones:", err)
-            return saved
-        }
-    }
-
-    static async getMicStream(deviceId = "", retries = 3, delayMs = 150): Promise<MediaStream | null> {
-        const audioConstraints: MediaTrackConstraints = {
-            deviceId: deviceId ? { exact: deviceId } : undefined,
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-            channelCount: 1
-        }
-
-        for (let attempt = 0; attempt < retries; attempt++) {
-            try {
-                return await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
-            } catch (err: any) {
-                if (err?.name === "NotReadableError" && attempt < retries - 1) {
-                    console.warn(`[AI STT] Mic hardware busy, retrying (${attempt + 1}/${retries})...`)
-                    await new Promise((resolve) => setTimeout(resolve, delayMs))
-                    continue
-                }
-
-                if (err?.name === "NotReadableError") {
-                    sendMain(Main.ACCESS_MICROPHONE_PERMISSION)
-                    return null
-                }
-
-                if (err?.name === "OverconstrainedError" && deviceId) {
-                    return this.getMicStream("", retries, delayMs)
-                }
-
-                console.error("Error accessing microphone:", err)
-                return null
-            }
-        }
-
-        return null
-    }
-
-    static async captureAudioContext(stream: MediaStream, operationId?: number): Promise<AudioContext | null> {
-        try {
-            const ac = new AudioContext({ sampleRate: 16000 })
-            this.ac = ac
-
-            const sourceNode = ac.createMediaStreamSource(stream)
-            const analyserNode = ac.createAnalyser()
-            analyserNode.fftSize = 256
-            sourceNode.connect(analyserNode)
-
-            this.sourceNode = sourceNode
-            this.analyserNode = analyserNode
-
-            this.startLevelMonitoring(ac, analyserNode)
-
-            await ac.audioWorklet.addModule("./assets/stt-processor.js")
-
-            if ((operationId && operationId !== this.sessionToken) || this.ac !== ac || ac.state === "closed") {
-                ac.close().catch(() => {})
-                return null
-            }
-            console.info("STT processor module loaded")
-
-            const captureNode = new AudioWorkletNode(ac, "stt-processor")
-            this.captureNode = captureNode
-
-            captureNode.port.onmessage = (e) => {
-                sendMain(Main.AI_AUDIO_DATA, { buffer: e.data })
-            }
-
-            sourceNode.connect(captureNode)
-            captureNode.connect(ac.destination)
-
-            return ac
-        } catch (err) {
-            console.error("Failed to capture audio context:", err)
-            this.stopCapture()
-            return null
-        }
-    }
-
-    private static startLevelMonitoring(ac: AudioContext, analyser: AnalyserNode) {
-        const dataArray = new Uint8Array(analyser.frequencyBinCount)
-
-        const updateLevel = () => {
-            if (!this.analyserNode || !this.ac || this.ac !== ac || ac.state === "closed") return
-
-            analyser.getByteTimeDomainData(dataArray)
-            let sum = 0
-
-            for (const byte of dataArray) {
-                const sample = (byte - 128) / 128
-                sum += sample * sample
-            }
-
-            const rms = Math.sqrt(sum / dataArray.length)
-            this.emitAudioLevel(Math.min(1.0, Math.round(rms * 4.5 * 100) / 100))
-
-            this.animFrameId = requestAnimationFrame(updateLevel)
-        }
-
-        updateLevel()
+        return MicCapture.resolveDeviceId(saved)
     }
 
     static onAudioLevel(callback: AudioLevelCallback): () => void {
@@ -233,33 +116,7 @@ export class SpeechToText {
     }
 
     static stopCapture() {
-        if (this.animFrameId !== null) {
-            cancelAnimationFrame(this.animFrameId)
-            this.animFrameId = null
-        }
-
-        ;[this.sourceNode, this.captureNode, this.analyserNode].forEach((node) => {
-            try {
-                node?.disconnect()
-            } catch (_) {}
-        })
-        this.sourceNode = this.captureNode = this.analyserNode = null
-
-        if (this.stream) {
-            this.stream.getTracks().forEach((track) => {
-                track.enabled = false
-                track.stop()
-            })
-            this.stream = null
-        }
-
-        if (this.ac) {
-            if (this.ac.state !== "closed") {
-                this.ac.close().catch(() => {})
-            }
-            this.ac = null
-        }
-
+        MicCapture.release(CONSUMER_ID)
         this.emitAudioLevel(0.0)
     }
 }
