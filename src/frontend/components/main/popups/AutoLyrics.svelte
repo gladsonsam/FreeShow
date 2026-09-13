@@ -125,9 +125,7 @@
         loadSongs()
     }
 
-    // Dev helper: dump a learned map's marks as a cue sheet for the offline harness
-    // (scripts/autoLyricsHarness.ts). Run the song through once navigating normally,
-    // then export — the fixture annotates itself.
+    // dumps a learned map's marks as a fixture cue sheet for scripts/autoLyricsHarness.ts
     function exportCueSheet(map: SongMap) {
         const sheet = {
             songName: $shows[map.showId]?.name || map.showId,

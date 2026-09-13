@@ -93,8 +93,8 @@ async function runFixture(fixture: Fixture, variants: Variant[], opts: EngineOpt
         return
     }
 
-    const map = await getMap()
     if (verbose) {
+        const map = await getMap()
         console.log(`  learned ${((map?.frameCount || 0) / (map?.fps || 10)).toFixed(0)}s, ${map?.marks.length || 0} marks, ${slideCount} slides`)
     }
 
@@ -102,7 +102,7 @@ async function runFixture(fixture: Fixture, variants: Variant[], opts: EngineOpt
         const pcm = variant.filters ? await decodePcm(fixture.audio, variant.filters) : sourcePcm
         const expected = applyVariant(cues, variant)
 
-        // the map persists between variants — each is another week's performance
+        // the map persists between variants — each one is another week's performance
         const result = await runFollowPass(pcm, slideCount, opts)
         const s = score(result, expected)
 

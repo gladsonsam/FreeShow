@@ -7,7 +7,8 @@
     import MaterialDropdown from "../../../components/inputs/MaterialDropdown.svelte"
     import Tip from "../../../components/main/Tip.svelte"
     import { ai, mediaDownloads } from "../../../stores"
-    import { resolveSttEngine, SpeechToText } from "../../stt/stt"
+    import { MicCapture } from "../../../audio/micCapture"
+    import { resolveSttEngine } from "../../stt/stt"
 
     $: options = $ai.stt || {}
 
@@ -48,7 +49,7 @@
 
             // auto select the SYSTEM default input (the first listed device can be e.g. a continuity iPhone)
             if (!options.micDeviceId && devices.length) {
-                const deviceId = await SpeechToText.resolveMicDeviceId("")
+                const deviceId = await MicCapture.resolveDeviceId("")
                 if (deviceId) updateValue("micDeviceId", deviceId)
             }
         })

@@ -1,10 +1,7 @@
-// Cue sheet = the ground truth for a fixture: when each slide should be live.
-//
-// Produced by the app's "Export cue sheet" button (Auto Lyrics popup), which dumps a
-// learned map's marks, so a fixture annotates itself after one normal run-through.
+// Ground truth for a fixture: when each slide should be live. Export one from the Auto
+// Lyrics popup after running the song through once.
 
 import { readFileSync } from "node:fs"
-import type { SongMark } from "../songMap"
 
 export interface Cue {
     timeMs: number
@@ -17,10 +14,6 @@ export interface CueSheet {
     cues: Cue[]
 }
 
-export function marksToCues(marks: SongMark[], fps: number): Cue[] {
-    return marks.map((mark) => ({ timeMs: Math.round((mark.frame / fps) * 1000), slideIndex: mark.slideIndex }))
-}
-
 export function loadCueSheet(file: string): CueSheet {
     const parsed = JSON.parse(readFileSync(file, "utf8"))
 
@@ -31,12 +24,15 @@ export function loadCueSheet(file: string): CueSheet {
 
     if (!cues.length) throw new Error(`${file}: no usable cues`)
 
-    const slideCount = Number(parsed.slideCount) || Math.max(...cues.map((c) => c.slideIndex)) + 1
-    return { songName: parsed.songName || "fixture", slideCount, cues }
+    return {
+        songName: parsed.songName || "fixture",
+        slideCount: Number(parsed.slideCount) || Math.max(...cues.map((c) => c.slideIndex)) + 1,
+        cues
+    }
 }
 
-// Which slide should be live at a given moment, per the cue sheet (-1 before the first cue)
-export function expectedSlideAt(cues: Cue[], timeMs: number): number {
+// which slide should be live at this moment (-1 before the first cue)
+export function expectedSlideAt(cues: Cue[], timeMs: number) {
     let slide = -1
     for (const cue of cues) {
         if (cue.timeMs > timeMs) break

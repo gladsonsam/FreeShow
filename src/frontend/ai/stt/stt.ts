@@ -82,8 +82,8 @@ export class SpeechToText {
                     this.emitAudioLevel(0)
                 }
             })
-        } catch (err: any) {
-            return { ok: false, error: err?.name === "NotAllowedError" || err?.name === "NotReadableError" ? "No microphone access" : "Could not create audio context" }
+        } catch (_) {
+            return { ok: false, error: "No microphone access" }
         }
 
         if (token !== this.sessionToken) {
@@ -98,10 +98,6 @@ export class SpeechToText {
         this.sessionToken++
         sendMain(Main.AI_LISTEN_STOP)
         this.stopCapture()
-    }
-
-    static async resolveMicDeviceId(saved: string): Promise<string> {
-        return MicCapture.resolveDeviceId(saved)
     }
 
     static onAudioLevel(callback: AudioLevelCallback): () => void {

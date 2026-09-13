@@ -13,17 +13,18 @@ import { _show } from "../../components/helpers/shows"
 import { newToast } from "../../utils/common"
 import { translateText } from "../../utils/language"
 import { autoLyrics, outLocked, outputs, shows, showsCache } from "../../stores"
-import { AudioChunker } from "./audioChunker"
+import { MicCapture } from "../micCapture"
 import { FollowEngine, type FollowSongContext } from "./followEngine"
 import { hashSongText, songMapKey, songMapStore } from "./songMap"
 import { AUTO_LYRICS_DEFAULTS, type AutoLyricsSettings, type AutoLyricsStatus } from "./types"
 
+const MIC_ID = "auto-lyrics"
 const MIC_RETRY_MS = 5000 // reconnect attempt interval after the mic drops
 const SUGGESTION_TTL_MS = 15000 // a suggestion the operator ignores goes stale
 
 class AutoLyricsControllerClass {
     private settings: AutoLyricsSettings = { ...AUTO_LYRICS_DEFAULTS }
-    private chunker: AudioChunker | null = null
+    private micToken = 0
     private followEngine: FollowEngine | null = null
     private active = false
 
@@ -70,10 +71,6 @@ class AutoLyricsControllerClass {
             newToast(translateText(key) + (songName ? `: ${songName}` : ""))
         })
 
-        this.chunker = new AudioChunker({
-            onBlock: (pcm) => this.followEngine?.handleBlock(pcm),
-            onError: (err) => this.handleMicError(err)
-        })
         this.updateSavedSongs()
         this.watchNavigation()
 
@@ -84,8 +81,8 @@ class AutoLyricsControllerClass {
         this.active = false
         this.clearReconnect()
         this.micErrorToasted = false
-        this.chunker?.stop()
-        this.chunker = null
+        this.micToken++
+        MicCapture.release(MIC_ID)
         this.followEngine?.dispose()
         this.followEngine = null
         this.outputsUnsub?.()
@@ -99,19 +96,22 @@ class AutoLyricsControllerClass {
     }
 
     private async tryStartMic() {
-        const chunker = this.chunker
-        if (!this.active || !chunker) return
+        if (!this.active) return
+        const token = ++this.micToken
 
         try {
-            await chunker.start(this.settings.micId)
+            await MicCapture.acquire(MIC_ID, this.settings.micId, {
+                onBlock: (block) => this.followEngine?.handleBlock(block.pcm),
+                onError: (err) => this.handleMicError(err)
+            })
         } catch (err) {
-            if (this.chunker === chunker) this.handleMicError(err instanceof Error ? err : new Error(String(err)))
+            if (token === this.micToken) this.handleMicError(err instanceof Error ? err : new Error(String(err)))
             return
         }
 
         // disabled (or restarted with another mic) while the mic was being opened
-        if (!this.active || this.chunker !== chunker) {
-            chunker.stop()
+        if (!this.active || token !== this.micToken) {
+            MicCapture.release(MIC_ID)
             return
         }
 
@@ -128,7 +128,7 @@ class AutoLyricsControllerClass {
         if (!this.active) return
         console.error("Auto Lyrics:", err)
 
-        this.chunker?.stop()
+        MicCapture.release(MIC_ID)
         autoLyrics.update((s) => ({ ...s, status: "error", errorMsg: err.message }))
         if (!this.micErrorToasted) {
             newToast("toast.auto_lyrics_error")
