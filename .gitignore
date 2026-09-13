@@ -22,3 +22,5 @@ test-results/
 *.ipr
 *.iws
 .serena
+# Auto Lyrics harness fixtures (local audio, often copyrighted)
+fixtures/autolyrics/
