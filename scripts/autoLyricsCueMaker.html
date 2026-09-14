@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Auto Lyrics Cue Maker</title>
+        <style>
+            :root {
+                color-scheme: dark;
+                font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+                background: #101116;
+                color: #f5f6fa;
+            }
+            * {
+                box-sizing: border-box;
+            }
+            body {
+                margin: 0;
+                padding: 32px 20px 60px;
+            }
+            main {
+                width: min(920px, 100%);
+                margin: auto;
+            }
+            h1 {
+                margin: 0 0 8px;
+                font-size: clamp(1.8rem, 4vw, 2.7rem);
+            }
+            .intro,
+            .hint,
+            .empty {
+                color: #aeb2c2;
+            }
+            .card {
+                margin-top: 20px;
+                padding: 20px;
+                border: 1px solid #323542;
+                border-radius: 14px;
+                background: #191b23;
+            }
+            .fields {
+                display: grid;
+                grid-template-columns: 1fr 150px;
+                gap: 14px;
+            }
+            label {
+                display: grid;
+                gap: 7px;
+                color: #c9ccda;
+                font-size: 0.9rem;
+            }
+            input,
+            button {
+                font: inherit;
+            }
+            input[type="text"],
+            input[type="number"],
+            input[type="file"] {
+                min-width: 0;
+                padding: 10px 12px;
+                border: 1px solid #414556;
+                border-radius: 8px;
+                background: #111219;
+                color: inherit;
+            }
+            audio {
+                width: 100%;
+                margin-top: 18px;
+            }
+            .status {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 16px;
+                margin: 18px 0 10px;
+            }
+            .time {
+                font:
+                    700 2rem ui-monospace,
+                    SFMono-Regular,
+                    Menlo,
+                    monospace;
+            }
+            .live {
+                padding: 7px 10px;
+                border-radius: 999px;
+                background: #252838;
+                color: #c9ccda;
+            }
+            .slide-buttons {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+                gap: 10px;
+            }
+            button {
+                padding: 11px 14px;
+                border: 1px solid #464b5e;
+                border-radius: 9px;
+                background: #292c38;
+                color: inherit;
+                cursor: pointer;
+            }
+            button:hover {
+                background: #343848;
+            }
+            button.primary {
+                border-color: #705cff;
+                background: #6048ef;
+                font-weight: 700;
+            }
+            button.active {
+                border-color: #69df8b;
+                box-shadow: inset 0 0 0 1px #69df8b;
+            }
+            .actions {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-top: 18px;
+            }
+            .actions .primary {
+                margin-left: auto;
+            }
+            ol {
+                margin: 12px 0 0;
+                padding: 0;
+                list-style: none;
+            }
+            li {
+                display: grid;
+                grid-template-columns: 90px 1fr auto;
+                align-items: center;
+                gap: 12px;
+                padding: 9px 4px;
+                border-bottom: 1px solid #2e313d;
+            }
+            li code {
+                color: #8fe6a8;
+            }
+            .delete {
+                padding: 5px 9px;
+                border: 0;
+                background: transparent;
+                color: #ff9393;
+            }
+            #message {
+                min-height: 1.4em;
+                color: #ffcc72;
+            }
+            @media (max-width: 600px) {
+                body {
+                    padding: 20px 12px 40px;
+                }
+                .fields {
+                    grid-template-columns: 1fr;
+                }
+                .actions .primary {
+                    width: 100%;
+                    margin-left: 0;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <main>
+            <h1>Auto Lyrics Cue Maker</h1>
+            <p class="intro">Load an MP3, play it, and tap the slide that should become live at each change. Your audio never leaves this browser.</p>
+
+            <section class="card">
+                <div class="fields">
+                    <label>Song audio <input id="audioFile" type="file" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.opus,.aac" /></label>
+                    <label>Number of slides <input id="slideCount" type="number" min="2" max="200" value="6" /></label>
+                    <label>Song name <input id="songName" type="text" placeholder="Cornerstone" /></label>
+                </div>
+
+                <audio id="audio" controls></audio>
+                <div class="status">
+                    <span id="time" class="time">0:00.000</span>
+                    <span id="live" class="live">No cue recorded</span>
+                </div>
+
+                <div id="slideButtons" class="slide-buttons"></div>
+                <p class="hint">Keyboard: Space plays/pauses, number keys mark slides 1–9, and Backspace undoes the latest cue.</p>
+                <p id="message" role="status"></p>
+
+                <div class="actions">
+                    <button id="undo" type="button">Undo last cue</button>
+                    <button id="clear" type="button">Clear cues</button>
+                    <button id="download" class="primary" type="button">Download cues.json</button>
+                </div>
+            </section>
+
+            <section class="card">
+                <strong>Recorded cues</strong>
+                <p id="empty" class="empty">Start the audio and select Slide 1 at the moment it should appear.</p>
+                <ol id="cueList"></ol>
+            </section>
+        </main>
+
+        <script>
+            const audio = document.querySelector("#audio")
+            const audioFile = document.querySelector("#audioFile")
+            const songName = document.querySelector("#songName")
+            const slideCount = document.querySelector("#slideCount")
+            const slideButtons = document.querySelector("#slideButtons")
+            const cueList = document.querySelector("#cueList")
+            const empty = document.querySelector("#empty")
+            const time = document.querySelector("#time")
+            const live = document.querySelector("#live")
+            const message = document.querySelector("#message")
+            let cues = []
+            let audioUrl = ""
+
+            function formatTime(ms) {
+                const minutes = Math.floor(ms / 60000)
+                const seconds = Math.floor((ms % 60000) / 1000)
+                const millis = Math.floor(ms % 1000)
+                return `${minutes}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`
+            }
+
+            function currentSlide() {
+                const now = Math.round(audio.currentTime * 1000)
+                return (
+                    [...cues]
+                        .sort((a, b) => a.timeMs - b.timeMs)
+                        .filter((cue) => cue.timeMs <= now)
+                        .at(-1)?.slideIndex ?? -1
+                )
+            }
+
+            function renderButtons() {
+                const count = Math.max(2, Math.min(200, Number(slideCount.value) || 2))
+                slideCount.value = count
+                slideButtons.replaceChildren()
+                for (let index = 0; index < count; index++) {
+                    const button = document.createElement("button")
+                    button.type = "button"
+                    button.textContent = `Slide ${index + 1}${index < 9 ? `  [${index + 1}]` : ""}`
+                    button.addEventListener("click", () => recordCue(index))
+                    button.dataset.slide = index
+                    slideButtons.append(button)
+                }
+                updateClock()
+            }
+
+            function recordCue(slideIndex) {
+                if (!audio.src) {
+                    message.textContent = "Choose an audio file first."
+                    return
+                }
+                if (currentSlide() === slideIndex) {
+                    message.textContent = `Slide ${slideIndex + 1} is already live.`
+                    return
+                }
+                cues.push({ timeMs: Math.round(audio.currentTime * 1000), slideIndex })
+                message.textContent = `Marked Slide ${slideIndex + 1}.`
+                renderCues()
+            }
+
+            function renderCues() {
+                cues.sort((a, b) => a.timeMs - b.timeMs)
+                cueList.replaceChildren()
+                empty.hidden = cues.length > 0
+                cues.forEach((cue, index) => {
+                    const row = document.createElement("li")
+                    const timestamp = document.createElement("code")
+                    timestamp.textContent = formatTime(cue.timeMs)
+                    const label = document.createElement("span")
+                    label.textContent = `Slide ${cue.slideIndex + 1}`
+                    const remove = document.createElement("button")
+                    remove.type = "button"
+                    remove.className = "delete"
+                    remove.textContent = "Delete"
+                    remove.addEventListener("click", () => {
+                        cues.splice(index, 1)
+                        renderCues()
+                    })
+                    row.append(timestamp, label, remove)
+                    cueList.append(row)
+                })
+                updateClock()
+            }
+
+            function updateClock() {
+                const now = Math.round(audio.currentTime * 1000)
+                const active = currentSlide()
+                time.textContent = formatTime(now)
+                live.textContent = active < 0 ? "No cue recorded" : `Slide ${active + 1} live`
+                document.querySelectorAll("[data-slide]").forEach((button) => button.classList.toggle("active", Number(button.dataset.slide) === active))
+            }
+
+            audioFile.addEventListener("change", () => {
+                const file = audioFile.files[0]
+                if (!file) return
+                if (audioUrl) URL.revokeObjectURL(audioUrl)
+                audioUrl = URL.createObjectURL(file)
+                audio.src = audioUrl
+                if (!songName.value) songName.value = file.name.replace(/\.[^.]+$/, "")
+                cues = []
+                message.textContent = "Audio loaded. Play it and mark Slide 1."
+                renderCues()
+            })
+            slideCount.addEventListener("change", renderButtons)
+            audio.addEventListener("timeupdate", updateClock)
+            audio.addEventListener("seeked", updateClock)
+            document.querySelector("#undo").addEventListener("click", () => {
+                cues.pop()
+                renderCues()
+            })
+            document.querySelector("#clear").addEventListener("click", () => {
+                if (cues.length && !confirm("Remove every recorded cue?")) return
+                cues = []
+                renderCues()
+            })
+            document.querySelector("#download").addEventListener("click", () => {
+                if (!songName.value.trim()) {
+                    message.textContent = "Enter the song name."
+                    return
+                }
+                if (cues.length < 2) {
+                    message.textContent = "Record at least two slide cues."
+                    return
+                }
+                const data = { songName: songName.value.trim(), slideCount: Number(slideCount.value), cues }
+                const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }))
+                const link = document.createElement("a")
+                link.href = url
+                link.download = "cues.json"
+                link.click()
+                URL.revokeObjectURL(url)
+                message.textContent = "Downloaded cues.json."
+            })
+            document.addEventListener("keydown", (event) => {
+                if (event.target.matches("input")) return
+                if (event.code === "Space") {
+                    event.preventDefault()
+                    audio.paused ? audio.play() : audio.pause()
+                } else if (/^Digit[1-9]$/.test(event.code)) {
+                    const index = Number(event.code.slice(-1)) - 1
+                    if (index < Number(slideCount.value)) recordCue(index)
+                } else if (event.code === "Backspace") {
+                    event.preventDefault()
+                    cues.pop()
+                    renderCues()
+                }
+            })
+
+            renderButtons()
+        </script>
+    </body>
+</html>

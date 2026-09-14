@@ -2,9 +2,10 @@
 //
 //   npm run test:lyrics                        # every fixture, every variant
 //   npm run test:lyrics -- --song Cornerstone  # one fixture
-//   npm run test:lyrics -- --variant tempo_0.9,noise_10dB
+//   npm run test:lyrics -- --variant tempo_0.9x,noise_10dB
 //   npm run test:lyrics -- --sweep             # threshold x leadMs table
 //   npm run test:lyrics -- --json out.json     # machine-readable results
+//   npm run test:lyrics -- --audio take.wav --cues cues.json
 //
 // Fixtures live in fixtures/autolyrics/<song>/ as source.<ext> + cues.json.
 // Export cues.json from the Auto Lyrics popup after one normal run-through of the song.
@@ -13,7 +14,7 @@
 import "fake-indexeddb/auto"
 
 import { existsSync, readdirSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { basename, join, resolve } from "node:path"
 import { loadCueSheet, type CueSheet } from "../src/frontend/audio/lyrics/harness/cues"
 import { decodePcm } from "../src/frontend/audio/lyrics/harness/decode"
 import { formatScore, score, type Score } from "../src/frontend/audio/lyrics/harness/metrics"
@@ -46,12 +47,41 @@ function parseArgs() {
     }
     return {
         song: get("--song"),
+        audio: get("--audio"),
+        cues: get("--cues"),
         variants: get("--variant")?.split(","),
         sweep: args.includes("--sweep"),
+        help: args.includes("--help") || args.includes("-h"),
+        list: args.includes("--list"),
         json: get("--json"),
         threshold: Number(get("--threshold") ?? AUTO_LYRICS_DEFAULTS.threshold),
-        leadMs: Number(get("--lead") ?? AUTO_LYRICS_DEFAULTS.leadMs)
+        leadMs: Number(get("--lead") ?? AUTO_LYRICS_DEFAULTS.leadMs),
+        minCoverage: get("--min-coverage") === undefined ? undefined : Number(get("--min-coverage")),
+        maxFalse: get("--max-false") === undefined ? undefined : Number(get("--max-false"))
     }
+}
+
+function printHelp() {
+    console.log(`Auto Lyrics offline regression harness
+
+Usage:
+  npm run test:lyrics
+  npm run test:lyrics -- --song <fixture-name>
+  npm run test:lyrics -- --audio <recording> --cues <cues.json>
+
+Options:
+  --variant <names>       Comma-separated audio variants (use --list to see them)
+  --threshold <percent>   Follow confidence threshold
+  --lead <milliseconds>   Advance lyrics this far before the learned cue
+  --sweep                 Compare common threshold and lead combinations
+  --json <path>           Write machine-readable results
+  --min-coverage <pct>    Fail if any run has lower timeline coverage
+  --max-false <count>     Fail if any run has more false advances
+  --list                  List fixture and variant names
+  --help                  Show this help
+
+The direct --audio/--cues form does not require launching FreeShow. See
+scripts/autoLyricsHarness.md for the cue-sheet format.`)
 }
 
 function loadFixtures(only?: string): Fixture[] {
@@ -80,6 +110,14 @@ function loadFixtures(only?: string): Fixture[] {
     return fixtures
 }
 
+function loadDirectFixture(audio: string, cues: string): Fixture[] {
+    const audioPath = resolve(audio)
+    const cuesPath = resolve(cues)
+    if (!existsSync(audioPath)) throw new Error(`Audio file not found: ${audioPath}`)
+    if (!existsSync(cuesPath)) throw new Error(`Cue sheet not found: ${cuesPath}`)
+    return [{ name: basename(audioPath), audio: audioPath, sheet: loadCueSheet(cuesPath) }]
+}
+
 // Learn once from the clean source, then follow each perturbed "performance".
 async function runFixture(fixture: Fixture, variants: Variant[], opts: EngineOptions, rows: Row[], verbose: boolean) {
     const { cues, slideCount } = fixture.sheet
@@ -89,8 +127,7 @@ async function runFixture(fixture: Fixture, variants: Variant[], opts: EngineOpt
     const learn = await runLearningPass(sourcePcm, cues, slideCount, opts)
 
     if (!learn.learned) {
-        console.log(`  ${fixture.name}: learning pass produced no usable map — check the cue sheet covers the song`)
-        return
+        throw new Error(`${fixture.name}: learning pass produced no usable map — check the cue sheet covers the song`)
     }
 
     if (verbose) {
@@ -113,7 +150,22 @@ async function runFixture(fixture: Fixture, variants: Variant[], opts: EngineOpt
 
 async function main() {
     const args = parseArgs()
-    const fixtures = loadFixtures(args.song)
+    if (args.help) {
+        printHelp()
+        return
+    }
+
+    if (!!args.audio !== !!args.cues) throw new Error("--audio and --cues must be supplied together")
+    if (![args.threshold, args.leadMs, args.minCoverage ?? 0, args.maxFalse ?? 0].every(Number.isFinite)) throw new Error("Threshold, lead, and pass/fail gates must be numbers")
+
+    if (args.list) {
+        const fixtures = existsSync(FIXTURE_DIR) ? readdirSync(FIXTURE_DIR) : []
+        console.log(`fixtures: ${fixtures.length ? fixtures.join(", ") : "(none)"}`)
+        console.log(`variants: ${VARIANTS.map((variant) => variant.name).join(", ")}`)
+        return
+    }
+
+    const fixtures = args.audio && args.cues ? loadDirectFixture(args.audio, args.cues) : loadFixtures(args.song)
     if (!fixtures.length) process.exit(1)
 
     const variants = args.variants ? VARIANTS.filter((v) => args.variants!.includes(v.name)) : VARIANTS
@@ -166,6 +218,13 @@ async function main() {
     if (args.json) {
         writeFileSync(args.json, JSON.stringify(rows, null, 2))
         console.log(`\nwrote ${args.json}`)
+    }
+
+    const failures = rows.filter((row) => (args.minCoverage !== undefined && row.score.coveragePct < args.minCoverage) || (args.maxFalse !== undefined && row.score.falseAdvances > args.maxFalse))
+    if (failures.length) {
+        console.error(`\n${failures.length} run(s) failed the requested quality gates:`)
+        for (const row of failures) console.error(`  ${row.song}/${row.variant}: coverage ${row.score.coveragePct}%, false advances ${row.score.falseAdvances}`)
+        process.exitCode = 1
     }
 }
 

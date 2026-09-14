@@ -24,9 +24,15 @@ export function loadCueSheet(file: string): CueSheet {
 
     if (!cues.length) throw new Error(`${file}: no usable cues`)
 
+    const slideCount = Number(parsed.slideCount) || Math.max(...cues.map((c) => c.slideIndex)) + 1
+    if (!Number.isInteger(slideCount) || slideCount < 1) throw new Error(`${file}: slideCount must be a positive integer`)
+    if (cues.some((cue) => cue.timeMs < 0 || !Number.isInteger(cue.slideIndex) || cue.slideIndex < 0 || cue.slideIndex >= slideCount)) {
+        throw new Error(`${file}: cues must have non-negative times and slide indexes between 0 and ${slideCount - 1}`)
+    }
+
     return {
         songName: parsed.songName || "fixture",
-        slideCount: Number(parsed.slideCount) || Math.max(...cues.map((c) => c.slideIndex)) + 1,
+        slideCount,
         cues
     }
 }
