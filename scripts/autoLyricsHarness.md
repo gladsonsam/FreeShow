@@ -9,20 +9,7 @@ It requires Node.js dependencies (`npm install`) and `ffmpeg` on `PATH`.
 
 ## Make a cue sheet on your laptop
 
-Start the local cue maker:
-
-```sh
-npm run test:lyrics:cues
-```
-
-Open `http://127.0.0.1:4174`, choose the MP3, enter the number of lyric slides, and
-play the song. Each time the live lyrics should change, press the matching slide button
-(or keys 1–9). Use Backspace to undo a mistake. Download `cues.json` when the song is
-finished. The MP3 stays on your laptop; the page has no upload or network step.
-
-Send the original MP3 and downloaded `cues.json` back for regression testing.
-
-Alternatively, run FreeShow in development mode and open the Auto Lyrics popup. Its
+Run FreeShow in development mode and open the Auto Lyrics popup. Its
 **Cue sheet recorder (test harness)** records the actual audience-output slide changes:
 
 1. Choose the reference MP3 in the recorder.
@@ -80,9 +67,6 @@ committed. Run all fixtures or select one:
 npm run test:lyrics
 npm run test:lyrics -- --song Cornerstone
 ```
-
-A cue sheet can also be exported from a learned song in the Auto Lyrics popup when
-FreeShow is running in development mode, but the app is not required.
 
 ## Useful regression commands
 

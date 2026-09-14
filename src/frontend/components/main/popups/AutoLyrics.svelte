@@ -154,22 +154,6 @@
         loadSongs()
     }
 
-    // dumps a learned map's marks as a fixture cue sheet for scripts/autoLyricsHarness.ts
-    function exportCueSheet(map: SongMap) {
-        const sheet = {
-            songName: $shows[map.showId]?.name || map.showId,
-            slideCount: map.slideCount,
-            cues: map.marks.map((mark) => ({ timeMs: Math.round((mark.frame / map.fps) * 1000), slideIndex: mark.slideIndex }))
-        }
-
-        const url = URL.createObjectURL(new Blob([JSON.stringify(sheet, null, 2)], { type: "application/json" }))
-        const link = document.createElement("a")
-        link.href = url
-        link.download = "cues.json"
-        link.click()
-        URL.revokeObjectURL(url)
-    }
-
     function openShow(map: SongMap) {
         if (!$shows[map.showId]) return
         activeShow.set({ id: map.showId, type: "show" })
@@ -259,11 +243,6 @@
                 <MaterialButton title={map.locked ? "settings.auto_lyrics_unlock" : "settings.auto_lyrics_lock"} on:click={() => toggleLock(map)} white={!!map.locked}>
                     <Icon id={map.locked ? "locked" : "unlocked"} size={0.9} white={!!map.locked} />
                 </MaterialButton>
-                {#if $isDev}
-                    <MaterialButton title="Export cue sheet (harness fixture)" on:click={() => exportCueSheet(map)}>
-                        <Icon id="export" size={0.9} />
-                    </MaterialButton>
-                {/if}
                 <MaterialButton title="settings.auto_lyrics_forget_song" on:click={() => deleteSong(map)} red>
                     <Icon id="delete" size={0.9} />
                 </MaterialButton>

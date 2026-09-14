@@ -28,9 +28,6 @@
 
     $: tabId = $settingsTab
 
-    // a removed tab id can linger in the saved app state (e.g. the old "auto_lyrics" tab)
-    $: if (!["general", "display_settings", "styles", "connection", "files", "profiles", "theme", "other"].includes(tabId)) settingsTab.set("general")
-
     let scrolled = false
     $: if (tabId === null) scrolled = false
     function scroll(e) {
