@@ -22,6 +22,17 @@ finished. The MP3 stays on your laptop; the page has no upload or network step.
 
 Send the original MP3 and downloaded `cues.json` back for regression testing.
 
+Alternatively, run FreeShow in development mode and open the Auto Lyrics popup. Its
+**Cue sheet recorder (test harness)** records the actual audience-output slide changes:
+
+1. Put the song's first lyric slide on an enabled audience output.
+2. Click **Start recording**.
+3. Start the MP3 and present the whole slideshow normally. The popup may be closed.
+4. Reopen Auto Lyrics, click **Stop recording**, then **Export cues.json**.
+
+This app recorder includes the show and layout IDs in the JSON, making it the preferred
+method when a FreeShow show file is available.
+
 ## Run a recording directly
 
 Create a cue sheet from your operator notes or recording timestamps:

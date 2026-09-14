@@ -2,6 +2,7 @@
     import { onDestroy, onMount } from "svelte"
     import { AudioMicrophone } from "../../../audio/audioMicrophone"
     import { autoLyricsController } from "../../../audio/lyrics/autoLyricsController"
+    import { cueRecorder, cueRecording } from "../../../audio/lyrics/harness/cueRecorder"
     import { mapCoveredSlides, type SongMap } from "../../../audio/lyrics/songMap"
     import { songMapStore } from "../../../audio/lyrics/songMap"
     import { AUTO_LYRICS_DEFAULTS, type AutoLyricsSettings } from "../../../audio/lyrics/types"
@@ -45,6 +46,7 @@
     })
     onDestroy(() => {
         navigator.mediaDevices?.removeEventListener?.("devicechange", loadMics)
+        if (recordingTimer) clearInterval(recordingTimer)
     })
 
     const modeOptions = [
@@ -62,6 +64,38 @@
         const m = Math.floor(totalSeconds / 60)
         const s = Math.floor(totalSeconds % 60)
         return `${m}:${s.toString().padStart(2, "0")}`
+    }
+
+    // DEVELOPMENT CUE RECORDER
+
+    let cueError = ""
+    let recorderNow = performance.now()
+    let recordingTimer: NodeJS.Timeout | null = null
+    $: cueElapsedMs = $cueRecording.startedAt ? Math.max(0, ($cueRecording.recording ? recorderNow : $cueRecording.stoppedAt) - $cueRecording.startedAt) : 0
+    $: if ($cueRecording.recording && !recordingTimer) {
+        recordingTimer = setInterval(() => (recorderNow = performance.now()), 250)
+    } else if (!$cueRecording.recording && recordingTimer) {
+        clearInterval(recordingTimer)
+        recordingTimer = null
+    }
+
+    function startCueRecording() {
+        cueError = ""
+        try {
+            cueRecorder.start()
+            recorderNow = performance.now()
+        } catch (err) {
+            cueError = err instanceof Error ? err.message : String(err)
+        }
+    }
+
+    function exportRecordedCues() {
+        cueError = ""
+        try {
+            cueRecorder.download()
+        } catch (err) {
+            cueError = err instanceof Error ? err.message : String(err)
+        }
     }
 
     // LEARNED SONGS
@@ -177,6 +211,29 @@
     <MaterialDropdown label="settings.auto_lyrics_mic" value={settings.micId} options={micOptions} allowEmpty on:change={(e) => update("micId", e.detail)} />
     <MaterialNumberInput label="settings.auto_lyrics_lead" value={settings.leadMs} defaultValue={AUTO_LYRICS_DEFAULTS.leadMs} min={-1000} max={2000} step={100} on:change={(e) => update("leadMs", e.detail)} />
     <MaterialNumberInput label="settings.auto_lyrics_threshold" value={settings.threshold} defaultValue={AUTO_LYRICS_DEFAULTS.threshold} min={10} max={100} step={5} on:change={(e) => update("threshold", e.detail)} />
+{/if}
+
+{#if $isDev}
+    <HRule title="Cue sheet recorder (test harness)" />
+    <div class="cueRecorder">
+        <div class="recorderStatus" class:recording={$cueRecording.recording}>
+            <span class="dot"></span>
+            <strong>{$cueRecording.recording ? "Recording slide changes" : $cueRecording.cues.length ? "Recording stopped" : "Ready to record"}</strong>
+            {#if $cueRecording.startedAt}<span>{formatTime(cueElapsedMs / 1000)} · {$cueRecording.cues.length} cues</span>{/if}
+            {#if $cueRecording.songName}<span>· {$cueRecording.songName}</span>{/if}
+        </div>
+        <p class="recorderHelp">Put the first lyric slide on the audience output, start recording, play the MP3, then run the slideshow normally. You may close this popup while recording.</p>
+        {#if cueError}<p class="recorderError">{cueError}</p>{/if}
+        <div class="recorderActions">
+            {#if $cueRecording.recording}
+                <MaterialButton variant="contained" on:click={() => cueRecorder.stop()} red>Stop recording</MaterialButton>
+            {:else}
+                <MaterialButton variant="contained" on:click={startCueRecording}>Start recording</MaterialButton>
+            {/if}
+            <MaterialButton on:click={exportRecordedCues} disabled={$cueRecording.cues.length < 2}>Export cues.json</MaterialButton>
+            {#if $cueRecording.cues.length}<MaterialButton on:click={() => cueRecorder.reset()}>Discard</MaterialButton>{/if}
+        </div>
+    </div>
 {/if}
 
 <HRule title="settings.auto_lyrics_saved_songs" />
@@ -296,6 +353,41 @@
         font-size: 0.8em;
         opacity: 0.6;
         font-style: italic;
+    }
+
+    .cueRecorder {
+        padding: 10px;
+        border: 1px solid rgb(128 128 128 / 0.35);
+        border-radius: 5px;
+    }
+    .recorderStatus,
+    .recorderActions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .recorderStatus {
+        font-size: 0.85em;
+    }
+    .recorderStatus > span:not(.dot) {
+        opacity: 0.7;
+    }
+    .recorderStatus .dot {
+        background-color: #888;
+    }
+    .recorderStatus.recording .dot {
+        background-color: #ff5050;
+        box-shadow: 0 0 0 3px rgb(255 80 80 / 0.2);
+    }
+    .recorderHelp {
+        margin: 8px 0;
+        font-size: 0.8em;
+        opacity: 0.7;
+    }
+    .recorderError {
+        color: #ff8a8a;
+        font-size: 0.8em;
     }
 
     .songs {
