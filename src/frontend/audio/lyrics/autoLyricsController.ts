@@ -14,6 +14,7 @@ import { newToast } from "../../utils/common"
 import { translateText } from "../../utils/language"
 import { autoLyrics, outLocked, outputs, shows, showsCache } from "../../stores"
 import { MicCapture } from "../micCapture"
+import { getActiveLyricsOutput } from "./activeOutput"
 import { FollowEngine, type FollowSongContext } from "./followEngine"
 import { hashSongText, songMapKey, songMapStore } from "./songMap"
 import { AUTO_LYRICS_DEFAULTS, type AutoLyricsSettings, type AutoLyricsStatus } from "./types"
@@ -51,7 +52,10 @@ class AutoLyricsControllerClass {
         if (needsRestart) this.disable()
 
         // live-tunable settings
-        this.followEngine?.configure({ thresholdPct: this.settings.threshold, leadMs: this.settings.leadMs })
+        this.followEngine?.configure({
+            thresholdPct: this.settings.threshold,
+            leadMs: this.settings.leadMs
+        })
 
         if (!this.active) await this.enable()
     }
@@ -62,7 +66,10 @@ class AutoLyricsControllerClass {
         this.setStatus("loading-model")
 
         this.followEngine = new FollowEngine()
-        this.followEngine.configure({ thresholdPct: this.settings.threshold, leadMs: this.settings.leadMs })
+        this.followEngine.configure({
+            thresholdPct: this.settings.threshold,
+            leadMs: this.settings.leadMs
+        })
         this.followEngine.onDecision((d) => this.handleFollowDecision(d.slideIndex, d.confidence))
         this.followEngine.onRuntime((r) => autoLyrics.update((s) => ({ ...s, follow: r })))
         this.followEngine.onLearned(({ songName, firstPass }) => {
@@ -129,7 +136,11 @@ class AutoLyricsControllerClass {
         console.error("Auto Lyrics:", err)
 
         MicCapture.release(MIC_ID)
-        autoLyrics.update((s) => ({ ...s, status: "error", errorMsg: err.message }))
+        autoLyrics.update((s) => ({
+            ...s,
+            status: "error",
+            errorMsg: err.message
+        }))
         if (!this.micErrorToasted) {
             newToast("toast.auto_lyrics_error")
             this.micErrorToasted = true
@@ -161,12 +172,8 @@ class AutoLyricsControllerClass {
             .catch(() => null)
     }
 
-    private getActiveOutput(): { id: string; slide: any } | null {
-        const all = get(outputs)
-        const entries = Object.entries(all).filter(([, o]: any) => o?.enabled && !o?.stageOutput)
-        const active = entries.find(([, o]: any) => o?.active) || entries[0]
-        if (!active) return null
-        return { id: active[0], slide: (active[1] as any)?.out?.slide }
+    private getActiveOutput() {
+        return getActiveLyricsOutput(get(outputs))
     }
 
     private buildSongContext(): FollowSongContext | null {
@@ -188,7 +195,7 @@ class AutoLyricsControllerClass {
             layoutId,
             slideCount: layoutRef.length,
             textHash: hashSongText(texts),
-            songName: show.name || (get(shows)[showId] as any)?.name || "",
+            songName: show.name || get(shows)[showId]?.name || "",
             outputIndex: slide.index ?? 0
         }
     }
@@ -202,13 +209,25 @@ class AutoLyricsControllerClass {
             this.navigateToSlide(showId, layoutId || "", slideIndex)
             this.setSuggestion(null)
         } else {
-            this.setSuggestion({ showId, slideIndex, label: this.slideLabel(showId, layoutId || "", slideIndex), confidence })
+            this.setSuggestion({
+                showId,
+                slideIndex,
+                label: this.slideLabel(showId, layoutId || "", slideIndex),
+                confidence
+            })
         }
     }
 
     // Suggestions expire on their own: if the operator ignored it, acting on it a
     // minute later (possibly during another verse) would be wrong.
-    private setSuggestion(suggestion: { showId: string; slideIndex: number; label: string; confidence: number } | null) {
+    private setSuggestion(
+        suggestion: {
+            showId: string
+            slideIndex: number
+            label: string
+            confidence: number
+        } | null
+    ) {
         if (this.suggestionTimer) clearTimeout(this.suggestionTimer)
         this.suggestionTimer = null
 

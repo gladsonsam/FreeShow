@@ -31,7 +31,7 @@ export interface EngineOptions {
 }
 
 export const resetStore = () => songMapStore.clearAll().catch(() => null)
-export const getMap = (identity: SongIdentity) => songMapStore.get(songMapKey(identity.showId || "harness-show", identity.layoutId || "harness-layout")).catch(() => null)
+export const getMap = (identity: SongIdentity = {}) => songMapStore.get(songMapKey(identity.showId || "harness-show", identity.layoutId || "harness-layout")).catch(() => null)
 
 function newEngine(opts: EngineOptions) {
     const engine = new FollowEngine()
@@ -40,7 +40,14 @@ function newEngine(opts: EngineOptions) {
 }
 
 function song(slideCount: number, identity: SongIdentity) {
-    return { showId: identity.showId || "harness-show", layoutId: identity.layoutId || "harness-layout", slideCount, textHash: "harness-hash", songName: identity.songName || "harness", outputIndex: 0 }
+    return {
+        showId: identity.showId || "harness-show",
+        layoutId: identity.layoutId || "harness-layout",
+        slideCount,
+        textHash: "harness-hash",
+        songName: identity.songName || "harness",
+        outputIndex: 0
+    }
 }
 
 // Replays the operator navigating by hand at the cue times. setSong(null) ends the pass,
@@ -67,7 +74,13 @@ export async function runLearningPass(pcm: Float32Array, cues: Cue[], slideCount
     }
 
     await engine.setSong(null)
-    return { decisions: [], timeline, learned, durationMs: durationMs(pcm), keyShift: 0 }
+    return {
+        decisions: [],
+        timeline,
+        learned,
+        durationMs: durationMs(pcm),
+        keyShift: 0
+    }
 }
 
 // The engine drives. Decisions are echoed back with notifySlide(_, false) because that's
@@ -80,7 +93,11 @@ export async function runFollowPass(pcm: Float32Array, slideCount: number, opts:
     let now = 0
 
     engine.onDecision((d) => {
-        decisions.push({ timeMs: now, slideIndex: d.slideIndex, confidence: d.confidence })
+        decisions.push({
+            timeMs: now,
+            slideIndex: d.slideIndex,
+            confidence: d.confidence
+        })
         slide = d.slideIndex
         engine.notifySlide(d.slideIndex, false)
     })
@@ -96,5 +113,11 @@ export async function runFollowPass(pcm: Float32Array, slideCount: number, opts:
 
     const keyShift = engine.getKeyShift()
     await engine.setSong(null)
-    return { decisions, timeline, learned: false, durationMs: durationMs(pcm), keyShift }
+    return {
+        decisions,
+        timeline,
+        learned: false,
+        durationMs: durationMs(pcm),
+        keyShift
+    }
 }

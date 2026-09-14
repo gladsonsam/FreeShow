@@ -97,7 +97,9 @@ function loadFixtures(only?: string): Fixture[] {
     }
 
     const fixtures: Fixture[] = []
-    for (const name of readdirSync(FIXTURE_DIR)) {
+    for (const entry of readdirSync(FIXTURE_DIR, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue
+        const name = entry.name
         if (only && name !== only) continue
 
         const dir = join(FIXTURE_DIR, name)
@@ -110,7 +112,11 @@ function loadFixtures(only?: string): Fixture[] {
             continue
         }
 
-        fixtures.push({ name, audio: join(dir, audio), sheet: loadCueSheet(cueFile) })
+        fixtures.push({
+            name,
+            audio: join(dir, audio),
+            sheet: loadCueSheet(cueFile)
+        })
     }
     return fixtures
 }
@@ -120,7 +126,13 @@ function loadDirectFixture(audio: string, cues: string): Fixture[] {
     const cuesPath = resolve(cues)
     if (!existsSync(audioPath)) throw new Error(`Audio file not found: ${audioPath}`)
     if (!existsSync(cuesPath)) throw new Error(`Cue sheet not found: ${cuesPath}`)
-    return [{ name: basename(audioPath), audio: audioPath, sheet: loadCueSheet(cuesPath) }]
+    return [
+        {
+            name: basename(audioPath),
+            audio: audioPath,
+            sheet: loadCueSheet(cuesPath)
+        }
+    ]
 }
 
 // Learn once from the clean source, then follow each perturbed "performance".
@@ -144,7 +156,10 @@ async function runFixture(fixture: Fixture, variants: Variant[], opts: EngineOpt
             ...map,
             durationMs: Math.round((map.frameCount / map.fps) * 1000),
             storageBytes: map.chroma.byteLength + map.energy.byteLength,
-            marks: map.marks.map((mark) => ({ ...mark, timeMs: Math.round((mark.frame / map.fps) * 1000) })),
+            marks: map.marks.map((mark) => ({
+                ...mark,
+                timeMs: Math.round((mark.frame / map.fps) * 1000)
+            })),
             chroma: Buffer.from(map.chroma).toString("base64"),
             energy: Buffer.from(map.energy).toString("base64")
         }
@@ -160,7 +175,14 @@ async function runFixture(fixture: Fixture, variants: Variant[], opts: EngineOpt
         const result = await runFollowPass(pcm, slideCount, opts, fixture.sheet)
         const s = score(result, expected)
 
-        rows.push({ song: fixture.name, variant: variant.name, threshold: opts.thresholdPct, leadMs: opts.leadMs, keyShift: result.keyShift, score: s })
+        rows.push({
+            song: fixture.name,
+            variant: variant.name,
+            threshold: opts.thresholdPct,
+            leadMs: opts.leadMs,
+            keyShift: result.keyShift,
+            score: s
+        })
         console.log(`  ${variant.name.padEnd(18)} key ${result.keyShift >= 0 ? "+" : ""}${result.keyShift}  ${formatScore(s)}`)
         if (trace) {
             for (const decision of result.decisions) {
@@ -180,6 +202,10 @@ async function main() {
 
     if (!!args.audio !== !!args.cues) throw new Error("--audio and --cues must be supplied together")
     if (![args.threshold, args.leadMs, args.minCoverage ?? 0, args.maxFalse ?? 0].every(Number.isFinite)) throw new Error("Threshold, lead, and pass/fail gates must be numbers")
+    if (args.threshold < 0 || args.threshold > 100) throw new Error("--threshold must be between 0 and 100")
+    if (args.minCoverage !== undefined && (args.minCoverage < 0 || args.minCoverage > 100)) throw new Error("--min-coverage must be between 0 and 100")
+    if (args.maxFalse !== undefined && args.maxFalse < 0) throw new Error("--max-false cannot be negative")
+    if (args.dumpMap && args.sweep) throw new Error("--dump-map cannot be combined with --sweep")
 
     if (args.list) {
         const fixtures = existsSync(FIXTURE_DIR) ? readdirSync(FIXTURE_DIR) : []
@@ -192,11 +218,12 @@ async function main() {
     if (!fixtures.length) process.exit(1)
     if (args.dumpMap && fixtures.length !== 1) throw new Error("--dump-map requires one fixture; select it with --song or use --audio/--cues")
 
-    const variants = args.variants ? VARIANTS.filter((v) => args.variants!.includes(v.name)) : VARIANTS
-    if (!variants.length) {
-        console.error(`Unknown variant. Available: ${VARIANTS.map((v) => v.name).join(", ")}`)
+    const unknownVariants = args.variants?.filter((name) => !VARIANTS.some((variant) => variant.name === name)) || []
+    if (unknownVariants.length) {
+        console.error(`Unknown variant(s): ${unknownVariants.join(", ")}. Available: ${VARIANTS.map((variant) => variant.name).join(", ")}`)
         process.exit(1)
     }
+    const variants = args.variants ? VARIANTS.filter((variant) => args.variants!.includes(variant.name)) : VARIANTS
 
     const configs: EngineOptions[] = args.sweep ? [40, 55, 70, 85].flatMap((thresholdPct) => [0, 200, 400, 800].map((leadMs) => ({ thresholdPct, leadMs }))) : [{ thresholdPct: args.threshold, leadMs: args.leadMs }]
 

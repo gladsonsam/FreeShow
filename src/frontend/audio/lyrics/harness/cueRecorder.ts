@@ -5,6 +5,7 @@
 import { get, writable } from "svelte/store"
 import { _show } from "../../../components/helpers/shows"
 import { outputs, shows, showsCache } from "../../../stores"
+import { getActiveLyricsOutput } from "../activeOutput"
 import type { CueSheet } from "./cues"
 
 export interface CueRecordingState {
@@ -56,10 +57,10 @@ class CueRecorder {
 
     async start() {
         if (!this.audio) throw new Error("Choose the reference MP3 before recording.")
-        const entries = Object.entries(get(outputs)).filter(([, output]: any) => output?.enabled && !output?.stageOutput)
-        const active = entries.find(([, output]: any) => output?.active) || entries[0]
-        const slide: any = active?.[1]?.out?.slide
+        const active = getActiveLyricsOutput(get(outputs))
+        const slide = active?.slide
         if (!active || !slide?.id || !Number.isInteger(slide.index)) throw new Error("Put the song's first slide on an enabled output before recording.")
+        const initialSlideIndex = slide.index as number
 
         const showId: string = slide.id
         const show = get(showsCache)[showId]
@@ -70,8 +71,8 @@ class CueRecorder {
         if (!slideCount) throw new Error("The active show layout has no slides.")
 
         this.outputsUnsub?.()
-        this.outputId = active[0]
-        this.lastIndex = slide.index
+        this.outputId = active.id
+        this.lastIndex = initialSlideIndex
         this.audio.currentTime = 0
         this.state = {
             recording: true,
@@ -79,19 +80,23 @@ class CueRecorder {
             playheadMs: 0,
             showId,
             layoutId,
-            songName: show.name || (get(shows)[showId] as any)?.name || showId,
+            songName: show.name || get(shows)[showId]?.name || showId,
             slideCount,
-            cues: [{ timeMs: 0, slideIndex: slide.index }]
+            cues: [{ timeMs: 0, slideIndex: initialSlideIndex }]
         }
         cueRecording.set(this.copyState())
 
         this.outputsUnsub = outputs.subscribe((all) => {
             if (!this.state.recording) return
-            const current: any = all[this.outputId]?.out?.slide
+            const current = all[this.outputId]?.out?.slide
             if (!current || current.id !== this.state.showId || (current.layout || this.state.layoutId) !== this.state.layoutId || !Number.isInteger(current.index) || current.index === this.lastIndex) return
+            const slideIndex = current.index as number
 
-            this.lastIndex = current.index
-            this.state.cues.push({ timeMs: Math.round((this.audio?.currentTime || 0) * 1000), slideIndex: current.index })
+            this.lastIndex = slideIndex
+            this.state.cues.push({
+                timeMs: Math.round((this.audio?.currentTime || 0) * 1000),
+                slideIndex
+            })
             cueRecording.set(this.copyState())
         })
 
