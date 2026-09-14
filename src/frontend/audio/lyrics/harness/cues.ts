@@ -11,6 +11,8 @@ export interface Cue {
 export interface CueSheet {
     songName: string
     slideCount: number
+    showId?: string
+    layoutId?: string
     cues: Cue[]
 }
 
@@ -33,6 +35,8 @@ export function loadCueSheet(file: string): CueSheet {
     return {
         songName: parsed.songName || "fixture",
         slideCount,
+        showId: typeof parsed.showId === "string" ? parsed.showId : undefined,
+        layoutId: typeof parsed.layoutId === "string" ? parsed.layoutId : undefined,
         cues
     }
 }

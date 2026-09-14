@@ -15,7 +15,7 @@ import "fake-indexeddb/auto"
 
 import { existsSync, readdirSync, writeFileSync } from "node:fs"
 import { basename, join, resolve } from "node:path"
-import { loadCueSheet, type CueSheet } from "../src/frontend/audio/lyrics/harness/cues"
+import { expectedSlideAt, loadCueSheet, type CueSheet } from "../src/frontend/audio/lyrics/harness/cues"
 import { decodePcm } from "../src/frontend/audio/lyrics/harness/decode"
 import { formatScore, score, type Score } from "../src/frontend/audio/lyrics/harness/metrics"
 import { applyVariant, VARIANTS, type Variant } from "../src/frontend/audio/lyrics/harness/perturb"
@@ -36,6 +36,7 @@ interface Row {
     variant: string
     threshold: number
     leadMs: number
+    keyShift: number
     score: Score
 }
 
@@ -53,7 +54,9 @@ function parseArgs() {
         sweep: args.includes("--sweep"),
         help: args.includes("--help") || args.includes("-h"),
         list: args.includes("--list"),
+        trace: args.includes("--trace"),
         json: get("--json"),
+        dumpMap: get("--dump-map"),
         threshold: Number(get("--threshold") ?? AUTO_LYRICS_DEFAULTS.threshold),
         leadMs: Number(get("--lead") ?? AUTO_LYRICS_DEFAULTS.leadMs),
         minCoverage: get("--min-coverage") === undefined ? undefined : Number(get("--min-coverage")),
@@ -75,8 +78,10 @@ Options:
   --lead <milliseconds>   Advance lyrics this far before the learned cue
   --sweep                 Compare common threshold and lead combinations
   --json <path>           Write machine-readable results
+  --dump-map <path>       Export the learned map, including exact base64 feature data
   --min-coverage <pct>    Fail if any run has lower timeline coverage
   --max-false <count>     Fail if any run has more false advances
+  --trace                 Print every follow decision beside the expected slide
   --list                  List fixture and variant names
   --help                  Show this help
 
@@ -119,20 +124,32 @@ function loadDirectFixture(audio: string, cues: string): Fixture[] {
 }
 
 // Learn once from the clean source, then follow each perturbed "performance".
-async function runFixture(fixture: Fixture, variants: Variant[], opts: EngineOptions, rows: Row[], verbose: boolean) {
+async function runFixture(fixture: Fixture, variants: Variant[], opts: EngineOptions, rows: Row[], verbose: boolean, trace: boolean, dumpMap?: string) {
     const { cues, slideCount } = fixture.sheet
 
     await resetStore()
     const sourcePcm = await decodePcm(fixture.audio)
-    const learn = await runLearningPass(sourcePcm, cues, slideCount, opts)
+    const learn = await runLearningPass(sourcePcm, cues, slideCount, opts, fixture.sheet)
 
     if (!learn.learned) {
         throw new Error(`${fixture.name}: learning pass produced no usable map — check the cue sheet covers the song`)
     }
 
+    const map = verbose || dumpMap ? await getMap(fixture.sheet) : null
     if (verbose) {
-        const map = await getMap()
         console.log(`  learned ${((map?.frameCount || 0) / (map?.fps || 10)).toFixed(0)}s, ${map?.marks.length || 0} marks, ${slideCount} slides`)
+    }
+    if (dumpMap && map) {
+        const exported = {
+            ...map,
+            durationMs: Math.round((map.frameCount / map.fps) * 1000),
+            storageBytes: map.chroma.byteLength + map.energy.byteLength,
+            marks: map.marks.map((mark) => ({ ...mark, timeMs: Math.round((mark.frame / map.fps) * 1000) })),
+            chroma: Buffer.from(map.chroma).toString("base64"),
+            energy: Buffer.from(map.energy).toString("base64")
+        }
+        writeFileSync(resolve(dumpMap), JSON.stringify(exported, null, 2))
+        console.log(`  wrote learned map ${resolve(dumpMap)}`)
     }
 
     for (const variant of variants) {
@@ -140,11 +157,17 @@ async function runFixture(fixture: Fixture, variants: Variant[], opts: EngineOpt
         const expected = applyVariant(cues, variant)
 
         // the map persists between variants — each one is another week's performance
-        const result = await runFollowPass(pcm, slideCount, opts)
+        const result = await runFollowPass(pcm, slideCount, opts, fixture.sheet)
         const s = score(result, expected)
 
-        rows.push({ song: fixture.name, variant: variant.name, threshold: opts.thresholdPct, leadMs: opts.leadMs, score: s })
-        console.log(`  ${variant.name.padEnd(18)} ${formatScore(s)}`)
+        rows.push({ song: fixture.name, variant: variant.name, threshold: opts.thresholdPct, leadMs: opts.leadMs, keyShift: result.keyShift, score: s })
+        console.log(`  ${variant.name.padEnd(18)} key ${result.keyShift >= 0 ? "+" : ""}${result.keyShift}  ${formatScore(s)}`)
+        if (trace) {
+            for (const decision of result.decisions) {
+                const expectedSlide = expectedSlideAt(expected, decision.timeMs)
+                console.log(`    ${(decision.timeMs / 1000).toFixed(1).padStart(6)}s -> ${String(decision.slideIndex + 1).padStart(2)}  expected ${String(expectedSlide + 1).padStart(2)}  conf ${decision.confidence}%`)
+            }
+        }
     }
 }
 
@@ -167,6 +190,7 @@ async function main() {
 
     const fixtures = args.audio && args.cues ? loadDirectFixture(args.audio, args.cues) : loadFixtures(args.song)
     if (!fixtures.length) process.exit(1)
+    if (args.dumpMap && fixtures.length !== 1) throw new Error("--dump-map requires one fixture; select it with --song or use --audio/--cues")
 
     const variants = args.variants ? VARIANTS.filter((v) => args.variants!.includes(v.name)) : VARIANTS
     if (!variants.length) {
@@ -183,7 +207,7 @@ async function main() {
 
         for (const fixture of fixtures) {
             console.log(`\n${fixture.name} (${fixture.sheet.cues.length} cues, ${fixture.sheet.slideCount} slides)`)
-            await runFixture(fixture, variants, opts, rows, configs.length === 1)
+            await runFixture(fixture, variants, opts, rows, configs.length === 1, args.trace, args.dumpMap)
         }
     }
 

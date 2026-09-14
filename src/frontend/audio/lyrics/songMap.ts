@@ -9,6 +9,8 @@
 
 import { CHROMA_DIM, CHROMA_FPS } from "./chromaFeatures"
 
+export const SONG_MAP_FEATURE_VERSION = 2
+
 export interface SongMark {
     frame: number // chroma frame index when this slide went live
     slideIndex: number // layout slide index
@@ -29,6 +31,7 @@ export interface SongMap {
     manualPass: boolean // true = recorded while the operator navigated by hand
     passCount?: number // times this map has been recorded/refined
     locked?: boolean // operator locked the timing: never auto-replace
+    featureVersion?: number // invalidate maps when chroma extraction changes
 }
 
 export function songMapKey(showId: string, layoutId: string) {

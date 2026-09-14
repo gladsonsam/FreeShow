@@ -25,7 +25,9 @@ function transpose(semitones: number): Variant {
     const ratio = 2 ** (semitones / 12)
     return {
         name: `transpose_${semitones > 0 ? "+" : ""}${semitones}`,
-        filters: `asetrate=16000*${ratio},aresample=16000,atempo=${1 / ratio}`,
+        // Filters run before decodePcm's output -ar, so normalise arbitrary source
+        // sample rates first; otherwise a 44.1 kHz MP3 gets a huge accidental shift.
+        filters: `aresample=16000,asetrate=16000*${ratio},aresample=16000,atempo=${1 / ratio}`,
         mapCueMs: same
     }
 }
@@ -35,7 +37,7 @@ function noise(snrDb: number): Variant {
     const amp = 10 ** (-snrDb / 20)
     return {
         name: `noise_${snrDb}dB`,
-        filters: `anoisesrc=c=pink:a=${amp.toFixed(4)}:d=99999[n];[0:a][n]amix=inputs=2:duration=first,volume=2`,
+        filters: `anoisesrc=c=pink:a=${amp.toFixed(4)}:d=99999:s=20260914[n];[0:a][n]amix=inputs=2:duration=first,volume=2`,
         mapCueMs: same
     }
 }

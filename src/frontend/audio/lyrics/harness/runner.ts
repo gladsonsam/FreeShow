@@ -5,11 +5,11 @@
 // before this module (the CLI pulls in "fake-indexeddb/auto" first).
 
 import { FollowEngine } from "../followEngine"
-import { songMapStore } from "../songMap"
-import type { Cue } from "./cues"
+import { songMapKey, songMapStore } from "../songMap"
+import type { Cue, CueSheet } from "./cues"
 import { blocks, durationMs } from "./decode"
 
-const KEY = "harness-show::harness-layout"
+type SongIdentity = Partial<Pick<CueSheet, "showId" | "layoutId" | "songName">>
 
 export interface Decision {
     timeMs: number
@@ -22,6 +22,7 @@ export interface PassResult {
     timeline: { timeMs: number; slide: number }[] // live slide per 100 ms block
     learned: boolean
     durationMs: number
+    keyShift: number
 }
 
 export interface EngineOptions {
@@ -30,7 +31,7 @@ export interface EngineOptions {
 }
 
 export const resetStore = () => songMapStore.clearAll().catch(() => null)
-export const getMap = () => songMapStore.get(KEY).catch(() => null)
+export const getMap = (identity: SongIdentity) => songMapStore.get(songMapKey(identity.showId || "harness-show", identity.layoutId || "harness-layout")).catch(() => null)
 
 function newEngine(opts: EngineOptions) {
     const engine = new FollowEngine()
@@ -38,18 +39,18 @@ function newEngine(opts: EngineOptions) {
     return engine
 }
 
-function song(slideCount: number) {
-    return { showId: "harness-show", layoutId: "harness-layout", slideCount, textHash: "hash", songName: "harness", outputIndex: 0 }
+function song(slideCount: number, identity: SongIdentity) {
+    return { showId: identity.showId || "harness-show", layoutId: identity.layoutId || "harness-layout", slideCount, textHash: "harness-hash", songName: identity.songName || "harness", outputIndex: 0 }
 }
 
 // Replays the operator navigating by hand at the cue times. setSong(null) ends the pass,
 // which is what writes the map.
-export async function runLearningPass(pcm: Float32Array, cues: Cue[], slideCount: number, opts: EngineOptions): Promise<PassResult> {
+export async function runLearningPass(pcm: Float32Array, cues: Cue[], slideCount: number, opts: EngineOptions, identity: SongIdentity = {}): Promise<PassResult> {
     const engine = newEngine(opts)
     let learned = false
     engine.onLearned(() => (learned = true))
 
-    await engine.setSong(song(slideCount))
+    await engine.setSong(song(slideCount, identity))
 
     const timeline: PassResult["timeline"] = []
     let next = 0
@@ -66,12 +67,12 @@ export async function runLearningPass(pcm: Float32Array, cues: Cue[], slideCount
     }
 
     await engine.setSong(null)
-    return { decisions: [], timeline, learned, durationMs: durationMs(pcm) }
+    return { decisions: [], timeline, learned, durationMs: durationMs(pcm), keyShift: 0 }
 }
 
 // The engine drives. Decisions are echoed back with notifySlide(_, false) because that's
 // what autoLyricsController does after navigating, and the cooldowns depend on it.
-export async function runFollowPass(pcm: Float32Array, slideCount: number, opts: EngineOptions): Promise<PassResult> {
+export async function runFollowPass(pcm: Float32Array, slideCount: number, opts: EngineOptions, identity: SongIdentity = {}): Promise<PassResult> {
     const engine = newEngine(opts)
 
     const decisions: Decision[] = []
@@ -84,7 +85,7 @@ export async function runFollowPass(pcm: Float32Array, slideCount: number, opts:
         engine.notifySlide(d.slideIndex, false)
     })
 
-    await engine.setSong(song(slideCount))
+    await engine.setSong(song(slideCount, identity))
 
     const timeline: PassResult["timeline"] = []
     for (const block of blocks(pcm)) {
@@ -93,6 +94,7 @@ export async function runFollowPass(pcm: Float32Array, slideCount: number, opts:
         timeline.push({ timeMs: block.timeMs, slide })
     }
 
+    const keyShift = engine.getKeyShift()
     await engine.setSong(null)
-    return { decisions, timeline, learned: false, durationMs: durationMs(pcm) }
+    return { decisions, timeline, learned: false, durationMs: durationMs(pcm), keyShift }
 }

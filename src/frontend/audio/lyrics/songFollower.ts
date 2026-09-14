@@ -40,11 +40,15 @@ const T_1 = 0.68
 const T_2 = 0.19
 const T_3 = 0.03
 // probability of a structural jump (repeat/skip) per frame, spread over section starts
-const JUMP_EPS = 0.002
+const JUMP_EPS = 0.0002
 // emission sharpness: weight = exp(BETA * (similarity - 1))
 const BETA = 7
 const CONF_WINDOW_SEC = 2.5
 const QUALITY_EMA = 0.25
+const KEY_SEARCH_FRAMES = 2
+const KEY_MIN_FRAMES = 20
+const KEY_MAX_FRAMES = 100
+const KEY_MARGIN = 0.01
 
 export class SongFollower {
     private ref: FollowerReference
@@ -54,6 +58,10 @@ export class SongFollower {
     private jumpFrames: number[]
     private _quality = 0.5
     private _position = 0
+    private pitchShift = 0
+    private keyFrames = 0
+    private keyLocked = false
+    private keyEvidence = new Float64Array(CHROMA_DIM)
 
     constructor(ref: FollowerReference) {
         this.ref = ref
@@ -69,6 +77,10 @@ export class SongFollower {
 
     get position() {
         return this._position
+    }
+
+    get keyShift() {
+        return this.pitchShift > CHROMA_DIM / 2 ? this.pitchShift - CHROMA_DIM : this.pitchShift
     }
 
     // Concentrate the posterior around a reference frame (soft: some spread + uniform floor)
@@ -113,6 +125,11 @@ export class SongFollower {
         const p = this.p
         const next = this.scratch
 
+        // Estimate one global key shift for the performance. The live chroma is compared
+        // near the currently tracked position, so this costs very little compared with
+        // adding 12 transposition states to the full HMM.
+        if (!this.keyLocked && energy >= LOW_ENERGY) this.updatePitchShift(chroma)
+
         // ---- transition ----
         for (let i = 0; i < n; i++) {
             let v = T_STAY * p[i]
@@ -121,6 +138,12 @@ export class SongFollower {
             if (i >= 3) v += T_3 * p[i - 3]
             next[i] = v
         }
+        // Clamp steps that would run beyond the reference onto its final frame. Without
+        // this absorbing edge, probability leaks away during a long outro and the tiny
+        // structural-jump prior eventually sends the tracker back into the song.
+        next[n - 1] += (T_1 + T_2 + T_3) * p[n - 1]
+        if (n > 1) next[n - 1] += (T_2 + T_3) * p[n - 2]
+        if (n > 2) next[n - 1] += T_3 * p[n - 3]
         // structural jumps
         const jumpShare = JUMP_EPS / this.jumpFrames.length
         for (let i = 0; i < n; i++) next[i] *= 1 - JUMP_EPS
@@ -190,12 +213,16 @@ export class SongFollower {
     }
 
     private chromaSim(live: Float32Array, refFrame: number): number {
+        return this.chromaSimAtShift(live, refFrame, this.pitchShift)
+    }
+
+    private chromaSimAtShift(live: Float32Array, refFrame: number, shift: number): number {
         const offset = refFrame * CHROMA_DIM
         let dot = 0
         let na = 0
         let nb = 0
         for (let d = 0; d < CHROMA_DIM; d++) {
-            const a = live[d]
+            const a = live[(d + shift) % CHROMA_DIM]
             const b = this.ref.chroma[offset + d]
             dot += a * b
             na += a * a
@@ -203,6 +230,45 @@ export class SongFollower {
         }
         const denom = Math.sqrt(na) * Math.sqrt(nb)
         return denom > 0 ? dot / denom : 0
+    }
+
+    private updatePitchShift(live: Float32Array) {
+        const lo = Math.max(0, this._position - KEY_SEARCH_FRAMES)
+        const hi = Math.min(this.ref.frameCount - 1, this._position + KEY_SEARCH_FRAMES)
+        let hasReferenceSignal = false
+
+        for (let shift = 0; shift < CHROMA_DIM; shift++) {
+            let best = 0
+            for (let frame = lo; frame <= hi; frame++) {
+                if (this.ref.energy[frame] < LOW_ENERGY) continue
+                hasReferenceSignal = true
+                best = Math.max(best, this.chromaSimAtShift(live, frame, shift))
+            }
+            this.keyEvidence[shift] += best
+        }
+
+        if (!hasReferenceSignal) return
+        this.keyFrames++
+
+        let bestShift = 0
+        let second = -Infinity
+        for (let shift = 1; shift < CHROMA_DIM; shift++) {
+            if (this.keyEvidence[shift] > this.keyEvidence[bestShift]) {
+                second = this.keyEvidence[bestShift]
+                bestShift = shift
+            } else {
+                second = Math.max(second, this.keyEvidence[shift])
+            }
+        }
+        // Use the best provisional shift immediately so a transposed performance does
+        // not push the position posterior off course while calibration accumulates.
+        this.pitchShift = bestShift
+        if (this.keyFrames < KEY_MIN_FRAMES) return
+
+        const margin = (this.keyEvidence[bestShift] - second) / this.keyFrames
+        if (margin >= KEY_MARGIN || this.keyFrames >= KEY_MAX_FRAMES) {
+            this.keyLocked = true
+        }
     }
 }
 

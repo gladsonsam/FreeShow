@@ -16,7 +16,7 @@ import { ChromaExtractor, CHROMA_FPS } from "./chromaFeatures"
 import { SongFollower } from "./songFollower"
 import { PassRecorder, shouldReplaceMap } from "./songLearner"
 import type { SongMap } from "./songMap"
-import { dequantizeChroma, dequantizeEnergy, mapCoveredSlides, songMapKey, songMapStore } from "./songMap"
+import { dequantizeChroma, dequantizeEnergy, mapCoveredSlides, SONG_MAP_FEATURE_VERSION, songMapKey, songMapStore } from "./songMap"
 
 export interface FollowSongContext {
     showId: string
@@ -53,7 +53,8 @@ export interface FollowDecision {
 const FIRE_COOLDOWN_FRAMES = CHROMA_FPS * 2 // after our own navigation
 const MANUAL_COOLDOWN_FRAMES = CHROMA_FPS * 3 // after the operator navigates
 const NATURAL_STABLE_FRAMES = 3 // adjacent-next-slide moves: 0.3s of agreement
-const JUMP_STABLE_FRAMES = 8 // backward/skip moves: 0.8s of agreement
+const JUMP_STABLE_FRAMES = 15 // backward/skip moves: 1.5s of agreement
+const FINAL_REWIND_STABLE_FRAMES = CHROMA_FPS * 5 // avoid noisy outros jumping back into the song
 const JUMP_EXTRA_CONFIDENCE = 0.15
 const MIN_FIRE_QUALITY = 0.5
 const LOST_QUALITY = 0.45
@@ -133,7 +134,7 @@ export class FollowEngine {
         if (token !== this.songToken) return
 
         // lyrics or structure changed since the map was learned -> re-learn
-        if (map && (map.slideCount !== ctx.slideCount || map.textHash !== ctx.textHash)) {
+        if (map && (map.featureVersion !== SONG_MAP_FEATURE_VERSION || map.slideCount !== ctx.slideCount || map.textHash !== ctx.textHash)) {
             songMapStore.delete(map.key).catch(() => null)
             map = null
         }
@@ -210,8 +211,10 @@ export class FollowEngine {
             }
 
             const natural = this.isNaturalNext(update.position, target)
-            const neededFrames = natural ? NATURAL_STABLE_FRAMES : JUMP_STABLE_FRAMES
-            const neededConfidence = natural ? this.minConfidence : this.minConfidence + JUMP_EXTRA_CONFIDENCE
+            const finalSlide = this.followerMarks[this.followerMarks.length - 1]?.slideIndex
+            const leavingFinalSlide = this.lastOutputIndex === finalSlide && target !== finalSlide
+            const neededFrames = leavingFinalSlide ? FINAL_REWIND_STABLE_FRAMES : natural ? NATURAL_STABLE_FRAMES : JUMP_STABLE_FRAMES
+            const neededConfidence = natural && !leavingFinalSlide ? this.minConfidence : Math.min(0.98, this.minConfidence + JUMP_EXTRA_CONFIDENCE)
 
             if (this.candidateFrames >= neededFrames && this.cooldownFrames <= 0 && update.confidence >= neededConfidence && update.quality >= MIN_FIRE_QUALITY) {
                 this.cooldownFrames = FIRE_COOLDOWN_FRAMES
@@ -276,6 +279,10 @@ export class FollowEngine {
     // keep the loaded map's lock state in sync when the operator toggles it in the UI
     setCurrentMapLocked(locked: boolean) {
         if (this.mapMeta) this.mapMeta.locked = locked
+    }
+
+    getKeyShift() {
+        return this.follower?.keyShift ?? 0
     }
 
     async forgetCurrentSong() {

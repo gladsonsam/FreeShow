@@ -4,7 +4,7 @@
 
 import { CHROMA_DIM, CHROMA_FPS, type ChromaFrame } from "./chromaFeatures"
 import type { SongMap, SongMark } from "./songMap"
-import { quantizeEnergy, quantizeVec, songMapKey } from "./songMap"
+import { quantizeEnergy, quantizeVec, SONG_MAP_FEATURE_VERSION, songMapKey } from "./songMap"
 
 // don't record forever if someone leaves a slide up (20 min cap)
 const MAX_FRAMES = CHROMA_FPS * 60 * 20
@@ -61,7 +61,8 @@ export class PassRecorder {
             recordedAt: Date.now(),
             manualPass: meta.manualPass,
             passCount: meta.passCount ?? 1,
-            locked: meta.locked ?? false
+            locked: meta.locked ?? false,
+            featureVersion: SONG_MAP_FEATURE_VERSION
         }
     }
 }

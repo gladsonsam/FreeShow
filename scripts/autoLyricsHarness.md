@@ -98,6 +98,9 @@ npm run test:lyrics -- --song Cornerstone --sweep
 
 # Produce JSON and fail automation when a run is below the quality bar
 npm run test:lyrics -- --song Cornerstone --json results.json --min-coverage 85 --max-false 1
+
+# Inspect the exact learned map plus readable metadata and cue times
+npm run test:lyrics -- --song Cornerstone --dump-map learned-map.json
 ```
 
 Run `npm run test:lyrics -- --help` for every option. The synthetic unit suite remains

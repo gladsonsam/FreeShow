@@ -88,13 +88,16 @@ function buildSong(seed: number, sections: { seconds: number; slide: number; sha
 }
 
 // live performance = ideal score resampled at `warp`x speed + performance noise
-function makeLive(song: Song, warp: number, seed: number): { chroma: Float32Array; energy: number }[] {
+function makeLive(song: Song, warp: number, seed: number, semitones = 0): { chroma: Float32Array; energy: number }[] {
     const rand = rng(seed)
     const frames: { chroma: Float32Array; energy: number }[] = []
     const liveLen = Math.floor(song.ideal.length / warp)
     for (let i = 0; i < liveLen; i++) {
         const refIndex = Math.min(song.ideal.length - 1, Math.round(i * warp))
-        frames.push({ chroma: addNoise(song.ideal[refIndex], rand, 0.25), energy: 0.5 })
+        const noisy = addNoise(song.ideal[refIndex], rand, 0.25)
+        const chroma = new Float32Array(CHROMA_DIM)
+        for (let d = 0; d < CHROMA_DIM; d++) chroma[(d + semitones + CHROMA_DIM) % CHROMA_DIM] = noisy[d]
+        frames.push({ chroma, energy: 0.5 })
     }
     return frames
 }
@@ -145,6 +148,34 @@ describe("SongFollower", () => {
         const { meanErrSec, slideSequence } = trackingError(song, 1.2, 44)
         expect(meanErrSec).toBeLessThan(2)
         expect(slideSequence).toEqual([0, 1, 2, 1, 3])
+    })
+
+    it("tracks a performance transposed to a different key", () => {
+        const song = buildSong(13, STANDARD_SECTIONS)
+        const follower = new SongFollower(song.ref)
+        const live = makeLive(song, 1, 54, 2)
+        const slideSequence: number[] = []
+
+        live.forEach((frame) => {
+            const update = follower.step(frame.chroma, frame.energy)
+            if (slideSequence[slideSequence.length - 1] !== update.slideIndex) slideSequence.push(update.slideIndex)
+        })
+
+        expect(slideSequence).toEqual([0, 1, 2, 1, 3])
+    })
+
+    it("stays on the final slide through a long outro", () => {
+        const song = buildSong(14, STANDARD_SECTIONS)
+        const follower = new SongFollower(song.ref)
+        const live = makeLive(song, 1, 55)
+        let update = follower.step(live[0].chroma, live[0].energy)
+        for (let i = 1; i < live.length; i++) update = follower.step(live[i].chroma, live[i].energy)
+        const outroFrame = live[live.length - 1]
+
+        for (let i = 0; i < 20 * FPS; i++) {
+            update = follower.step(outroFrame.chroma, outroFrame.energy)
+            expect(update.slideIndex).toBe(3)
+        }
     })
 
     it("stays in the FIRST chorus region while the first chorus plays (repeat disambiguation)", () => {

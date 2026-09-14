@@ -102,6 +102,13 @@ export class ChromaExtractor {
         // relative distribution + log compression, so loudness doesn't matter
         if (total > 1e-12) {
             for (let p = 0; p < CHROMA_DIM; p++) raw[p] = Math.log1p((1000 * raw[p]) / total)
+
+            // Broadband room/congregation noise raises every pitch class by roughly the
+            // same amount. Remove that common floor so the remaining vector describes
+            // tonal contrast rather than noise level.
+            let floor = raw[0]
+            for (let p = 1; p < CHROMA_DIM; p++) floor = Math.min(floor, raw[p])
+            for (let p = 0; p < CHROMA_DIM; p++) raw[p] = Math.max(0, raw[p] - floor)
         }
         l2Normalize(raw)
 
