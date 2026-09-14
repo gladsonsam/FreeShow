@@ -9,8 +9,8 @@ import type { CueSheet } from "./cues"
 
 export interface CueRecordingState {
     recording: boolean
-    startedAt: number
-    stoppedAt: number
+    audioName: string
+    playheadMs: number
     showId: string
     layoutId: string
     songName: string
@@ -20,8 +20,8 @@ export interface CueRecordingState {
 
 const EMPTY: CueRecordingState = {
     recording: false,
-    startedAt: 0,
-    stoppedAt: 0,
+    audioName: "",
+    playheadMs: 0,
     showId: "",
     layoutId: "",
     songName: "",
@@ -36,8 +36,26 @@ class CueRecorder {
     private outputId = ""
     private lastIndex = -1
     private outputsUnsub: (() => void) | null = null
+    private audio: HTMLAudioElement | null = null
+    private audioUrl = ""
 
-    start() {
+    loadAudio(file: File) {
+        this.reset()
+        if (this.audioUrl) URL.revokeObjectURL(this.audioUrl)
+
+        this.audioUrl = URL.createObjectURL(file)
+        this.audio = new Audio(this.audioUrl)
+        this.audio.addEventListener("timeupdate", () => {
+            this.state.playheadMs = Math.round((this.audio?.currentTime || 0) * 1000)
+            cueRecording.set(this.copyState())
+        })
+        this.audio.addEventListener("ended", () => this.stop())
+        this.state.audioName = file.name
+        cueRecording.set(this.copyState())
+    }
+
+    async start() {
+        if (!this.audio) throw new Error("Choose the reference MP3 before recording.")
         const entries = Object.entries(get(outputs)).filter(([, output]: any) => output?.enabled && !output?.stageOutput)
         const active = entries.find(([, output]: any) => output?.active) || entries[0]
         const slide: any = active?.[1]?.out?.slide
@@ -54,10 +72,11 @@ class CueRecorder {
         this.outputsUnsub?.()
         this.outputId = active[0]
         this.lastIndex = slide.index
+        this.audio.currentTime = 0
         this.state = {
             recording: true,
-            startedAt: performance.now(),
-            stoppedAt: 0,
+            audioName: this.state.audioName,
+            playheadMs: 0,
             showId,
             layoutId,
             songName: show.name || (get(shows)[showId] as any)?.name || showId,
@@ -72,15 +91,23 @@ class CueRecorder {
             if (!current || current.id !== this.state.showId || (current.layout || this.state.layoutId) !== this.state.layoutId || !Number.isInteger(current.index) || current.index === this.lastIndex) return
 
             this.lastIndex = current.index
-            this.state.cues.push({ timeMs: Math.round(performance.now() - this.state.startedAt), slideIndex: current.index })
+            this.state.cues.push({ timeMs: Math.round((this.audio?.currentTime || 0) * 1000), slideIndex: current.index })
             cueRecording.set(this.copyState())
         })
+
+        try {
+            await this.audio.play()
+        } catch (err) {
+            this.stop()
+            throw new Error(`Could not play the selected audio: ${err instanceof Error ? err.message : String(err)}`)
+        }
     }
 
     stop() {
         if (!this.state.recording) return
         this.state.recording = false
-        this.state.stoppedAt = performance.now()
+        this.state.playheadMs = Math.round((this.audio?.currentTime || 0) * 1000)
+        this.audio?.pause()
         this.outputsUnsub?.()
         this.outputsUnsub = null
         cueRecording.set(this.copyState())
@@ -91,7 +118,11 @@ class CueRecorder {
         this.outputsUnsub = null
         this.outputId = ""
         this.lastIndex = -1
-        this.state = { ...EMPTY, cues: [] }
+        if (this.audio) {
+            this.audio.pause()
+            this.audio.currentTime = 0
+        }
+        this.state = { ...EMPTY, audioName: this.state.audioName, cues: [] }
         cueRecording.set(this.copyState())
     }
 

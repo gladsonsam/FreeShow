@@ -46,7 +46,6 @@
     })
     onDestroy(() => {
         navigator.mediaDevices?.removeEventListener?.("devicechange", loadMics)
-        if (recordingTimer) clearInterval(recordingTimer)
     })
 
     const modeOptions = [
@@ -69,21 +68,17 @@
     // DEVELOPMENT CUE RECORDER
 
     let cueError = ""
-    let recorderNow = performance.now()
-    let recordingTimer: NodeJS.Timeout | null = null
-    $: cueElapsedMs = $cueRecording.startedAt ? Math.max(0, ($cueRecording.recording ? recorderNow : $cueRecording.stoppedAt) - $cueRecording.startedAt) : 0
-    $: if ($cueRecording.recording && !recordingTimer) {
-        recordingTimer = setInterval(() => (recorderNow = performance.now()), 250)
-    } else if (!$cueRecording.recording && recordingTimer) {
-        clearInterval(recordingTimer)
-        recordingTimer = null
+
+    function loadCueAudio(event: Event) {
+        cueError = ""
+        const file = (event.currentTarget as HTMLInputElement).files?.[0]
+        if (file) cueRecorder.loadAudio(file)
     }
 
-    function startCueRecording() {
+    async function startCueRecording() {
         cueError = ""
         try {
-            cueRecorder.start()
-            recorderNow = performance.now()
+            await cueRecorder.start()
         } catch (err) {
             cueError = err instanceof Error ? err.message : String(err)
         }
@@ -216,19 +211,23 @@
 {#if $isDev}
     <HRule title="Cue sheet recorder (test harness)" />
     <div class="cueRecorder">
+        <label class="audioPicker">
+            <span>Reference MP3</span>
+            <input type="file" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.opus,.aac" on:change={loadCueAudio} disabled={$cueRecording.recording} />
+        </label>
         <div class="recorderStatus" class:recording={$cueRecording.recording}>
             <span class="dot"></span>
             <strong>{$cueRecording.recording ? "Recording slide changes" : $cueRecording.cues.length ? "Recording stopped" : "Ready to record"}</strong>
-            {#if $cueRecording.startedAt}<span>{formatTime(cueElapsedMs / 1000)} · {$cueRecording.cues.length} cues</span>{/if}
+            {#if $cueRecording.audioName}<span>{$cueRecording.audioName} · {formatTime($cueRecording.playheadMs / 1000)} · {$cueRecording.cues.length} cues</span>{/if}
             {#if $cueRecording.songName}<span>· {$cueRecording.songName}</span>{/if}
         </div>
-        <p class="recorderHelp">Put the first lyric slide on the audience output, start recording, play the MP3, then run the slideshow normally. You may close this popup while recording.</p>
+        <p class="recorderHelp">Choose the MP3 and put the first lyric slide on the audience output. Starting the recording also starts the MP3; then run the slideshow normally. You may close this popup while recording.</p>
         {#if cueError}<p class="recorderError">{cueError}</p>{/if}
         <div class="recorderActions">
             {#if $cueRecording.recording}
                 <MaterialButton variant="contained" on:click={() => cueRecorder.stop()} red>Stop recording</MaterialButton>
             {:else}
-                <MaterialButton variant="contained" on:click={startCueRecording}>Start recording</MaterialButton>
+                <MaterialButton variant="contained" on:click={startCueRecording}>Start recording & play MP3</MaterialButton>
             {/if}
             <MaterialButton on:click={exportRecordedCues} disabled={$cueRecording.cues.length < 2}>Export cues.json</MaterialButton>
             {#if $cueRecording.cues.length}<MaterialButton on:click={() => cueRecorder.reset()}>Discard</MaterialButton>{/if}
@@ -359,6 +358,13 @@
         padding: 10px;
         border: 1px solid rgb(128 128 128 / 0.35);
         border-radius: 5px;
+    }
+    .audioPicker {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+        font-size: 0.8em;
     }
     .recorderStatus,
     .recorderActions {
