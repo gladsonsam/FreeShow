@@ -50,14 +50,15 @@ function song(slideCount: number, identity: SongIdentity) {
     }
 }
 
-// Replays the operator navigating by hand at the cue times. setSong(null) ends the pass,
-// which is what writes the map.
+// Replays the operator teaching the song: arm recording, navigate by hand at the
+// cue times, then end the pass — which is what writes the map.
 export async function runLearningPass(pcm: Float32Array, cues: Cue[], slideCount: number, opts: EngineOptions, identity: SongIdentity = {}): Promise<PassResult> {
     const engine = newEngine(opts)
     let learned = false
     engine.onLearned(() => (learned = true))
 
     await engine.setSong(song(slideCount, identity))
+    engine.startTeaching()
 
     const timeline: PassResult["timeline"] = []
     let next = 0

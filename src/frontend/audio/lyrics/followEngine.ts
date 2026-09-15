@@ -1,14 +1,16 @@
-// Learn & Follow engine — the default auto-lyrics mode.
+// Teach & Follow engine — the default auto-lyrics mode.
 //
 // Per song (show + layout):
-//   1. No stored map yet -> LEARNING: record chroma + the operator's slide changes.
-//      When the song ends with a usable pass, save it as the song's map.
+//   1. Nothing stored yet -> READY: the song is loaded but nothing is recorded.
+//      The operator explicitly teaches it once (startTeaching), navigating as usual
+//      while the engine records chroma + slide changes, then finishes (finishTeaching)
+//      to save the pass as the song's map. Nothing is ever learned implicitly.
 //   2. Map exists -> FOLLOWING: run the SongFollower against the map and fire slide
 //      navigation as the tracked position crosses the learned slide boundaries
-//      (with a configurable lead so lyrics can appear slightly early). A new pass is
-//      still recorded; if the operator had to correct the follower, the new pass
-//      replaces the map so next week's timing is better.
+//      (with a configurable lead so lyrics can appear slightly early).
 //
+// Follow passes are never recorded and never overwrite the map: timing only changes
+// through an explicit re-teach (startTeaching while following, then finishTeaching).
 // The operator always wins: manual navigation re-anchors the follower and pauses
 // decisions briefly. No network, no models — everything runs locally.
 
@@ -27,7 +29,7 @@ export interface FollowSongContext {
     outputIndex: number
 }
 
-export type FollowState = "idle" | "learning" | "following" | "lost"
+export type FollowState = "idle" | "ready" | "learning" | "following" | "lost"
 
 export interface FollowRuntime {
     state: FollowState
@@ -37,6 +39,7 @@ export interface FollowRuntime {
     confidence: number // 0-100
     hasMap: boolean
     passSeconds: number // audio recorded in the current pass
+    passSlides: number // distinct slides covered in the current pass
     passUsable: boolean // current pass is good enough to be saved as a map
 }
 
@@ -73,6 +76,7 @@ export class FollowEngine {
 
     private state: FollowState = "idle"
     private lastOutputIndex = -1
+    private learnArmed = false
     private cooldownFrames = 0
     private candidateSlide = -1
     private candidateFrames = 0
@@ -102,10 +106,14 @@ export class FollowEngine {
         if (typeof opts.leadMs === "number") this.leadFrames = Math.round((opts.leadMs / 1000) * CHROMA_FPS)
     }
 
-    // The active output moved to a different song (or was cleared: ctx = null)
+    // The active output moved to a different song (or was cleared: ctx = null).
+    // Moving on while teaching auto-saves the pass when it is usable. Teaching is
+    // per song: the new song always starts unarmed, so passing through an already
+    // learned song can never silently replace its timing.
     async setSong(ctx: FollowSongContext | null) {
         const token = ++this.songToken
         await this.finishPass()
+        this.learnArmed = false
         if (token !== this.songToken) return
 
         this.song = ctx
@@ -118,6 +126,7 @@ export class FollowEngine {
         this.resetDecisionState()
 
         if (!ctx) {
+            this.learnArmed = false
             this.state = "idle"
             this.pushRuntime(true)
             return
@@ -153,12 +162,54 @@ export class FollowEngine {
             this.mapMeta = { locked: !!map.locked, passCount: map.passCount || 1, coveredSlides: mapCoveredSlides(map.marks) }
             this.state = "following"
         } else {
-            this.state = "learning"
+            this.state = "ready"
         }
 
-        this.recorder = new PassRecorder()
-        this.recorder.markSlide(ctx.outputIndex, true)
         this.pushRuntime(true)
+    }
+
+    // Start explicitly recording the current song. Works both for a first teach
+    // (ready -> learning) and a re-teach (following -> learning, replacing the map
+    // on finish). Nothing records unless this is called — navigating on your own
+    // never trains the model.
+    startTeaching() {
+        if (!this.song || this.state === "learning") return
+        this.learnArmed = true
+        // a re-teach drops live following while the operator drives; the stored map
+        // stays untouched until finishTeaching(true) overwrites it
+        this.follower = null
+        this.followerMarks = []
+        this.beginTeachingPass()
+        this.state = "learning"
+        this.pushRuntime(true)
+    }
+
+    // Stop teaching. save=true keeps the pass when it is usable (first map, or a
+    // re-teach that improves on the stored one); save=false discards it. Either way
+    // the engine resumes following the stored map when there is one.
+    async finishTeaching(save: boolean): Promise<{ saved: boolean; songName: string }> {
+        const songName = this.song?.songName || ""
+        this.learnArmed = false
+        if (!this.song) {
+            this.state = "idle"
+            this.pushRuntime(true)
+            return { saved: false, songName }
+        }
+        if (!save) this.recorder = null
+
+        const saved = await this.finishPass()
+
+        // reload whatever is stored now (new map, replaced map, or the untouched one)
+        const ctx = this.song
+        this.song = null
+        await this.setSong(ctx)
+        return { saved, songName }
+    }
+
+    private beginTeachingPass() {
+        this.recorder = new PassRecorder()
+        this.recorder.markSlide(this.lastOutputIndex, true)
+        this.state = "learning"
     }
 
     // Output slide index changed within the current song
@@ -237,16 +288,18 @@ export class FollowEngine {
         return false
     }
 
-    // Save (or replace) the song map if this pass taught us something
-    private async finishPass() {
+    // Save the in-progress teaching pass when it taught us something. Returns whether
+    // a map was written. Follow passes are never recorded, so this only ever fires
+    // for explicit teaching.
+    private async finishPass(): Promise<boolean> {
         const recorder = this.recorder
         const song = this.song
-        const wasFollowing = !!this.follower
-        const existing = wasFollowing ? this.mapMeta : null
+        const existing = this.mapMeta
+        const firstPass = !this.hasMap
         this.recorder = null
-        if (!recorder || !song || !recorder.isUsable()) return
+        if (!recorder || !song || !recorder.isUsable()) return false
 
-        if (!shouldReplaceMap(existing, { manualMoves: recorder.manualMoves, coveredSlides: recorder.coveredSlides() })) return
+        if (!shouldReplaceMap(existing, { manualMoves: recorder.manualMoves, coveredSlides: recorder.coveredSlides() })) return false
 
         try {
             await songMapStore.put(
@@ -255,19 +308,24 @@ export class FollowEngine {
                     layoutId: song.layoutId,
                     slideCount: song.slideCount,
                     textHash: song.textHash,
-                    manualPass: !wasFollowing,
+                    manualPass: firstPass,
                     passCount: (existing?.passCount || 0) + 1
                 })
             )
-            this.learnedCb?.({ songName: song.songName, firstPass: !wasFollowing })
+            this.hasMap = true
+            this.mapMeta = { locked: existing?.locked || false, passCount: (existing?.passCount || 0) + 1, coveredSlides: recorder.coveredSlides() }
+            this.learnedCb?.({ songName: song.songName, firstPass })
+            return true
         } catch (err) {
             console.error("Auto Lyrics: could not save song map", err)
+            return false
         }
     }
 
     async forgetAllSongs() {
         const ctx = this.song
         this.song = null // discard the in-progress pass too
+        this.learnArmed = false
         try {
             await songMapStore.clearAll()
         } catch (err) {
@@ -292,7 +350,10 @@ export class FollowEngine {
         } catch (err) {
             console.error("Auto Lyrics: could not delete song map", err)
         }
-        // relearn from now on
+        // start over: drop any in-progress teaching pass so forgetting can't
+        // accidentally re-save it. The song reloads unmapped (ready); teaching
+        // resumes only when explicitly started again.
+        this.recorder = null
         const ctx = this.song
         this.song = null
         await this.setSong(ctx)
@@ -306,6 +367,7 @@ export class FollowEngine {
         this.followerMarks = []
         this.recorder = null
         this.mapMeta = null
+        this.learnArmed = false
         this.state = "idle"
         this.resetDecisionState()
     }
@@ -336,6 +398,7 @@ export class FollowEngine {
             confidence: Math.round(this.lastConfidence * 100),
             hasMap: this.hasMap,
             passSeconds: this.recorder ? Math.round(this.recorder.frames / CHROMA_FPS) : 0,
+            passSlides: this.recorder ? this.recorder.coveredSlides() : 0,
             passUsable: this.recorder?.isUsable() || false
         })
     }

@@ -46,9 +46,22 @@ const BETA = 7
 const CONF_WINDOW_SEC = 2.5
 const QUALITY_EMA = 0.25
 const KEY_SEARCH_FRAMES = 2
-const KEY_MIN_FRAMES = 20
-const KEY_MAX_FRAMES = 100
+const KEY_MIN_FRAMES = 20 // earliest lock: 20 *voted* frames, not just 20 elapsed frames
+const KEY_MAX_FRAMES = 400 // fallback lock after substantial tonal evidence — early confusion (quiet intro + room noise) must not cement a wrong key
 const KEY_MARGIN = 0.01
+// A frame only votes for a key when one shift explains the audio clearly better than
+// every other: broadband noise matches all shifts almost equally, so those frames
+// abstain instead of casting random votes. Calibrated on a quiet-intro song under
+// 10 dB pink noise: correct-position frames vote ~75% for the true shift, while
+// wrong-position frames mostly abstain and otherwise scatter.
+const KEY_VOTE_MIN_SIM = 0.9
+const KEY_VOTE_MIN_MARGIN = 0.06
+// After locking, keep a sliding window of recent votes. If a different shift dominates
+// it, the lock was wrong (e.g. taken during early confusion) — switch instead of
+// staying confidently lost forever. Votes here still only come from clear frames, so
+// diffuse/noisy stretches pause revalidation rather than triggering flips.
+const KEY_REVALIDATE_WINDOW = 100
+const KEY_REVALIDATE_FLIP = 60
 
 export class SongFollower {
     private ref: FollowerReference
@@ -62,12 +75,23 @@ export class SongFollower {
     private keyFrames = 0
     private keyLocked = false
     private keyEvidence = new Float64Array(CHROMA_DIM)
+    private keyScores = new Float64Array(CHROMA_DIM)
+    private refInvNorm: Float64Array
+    private keyRecent: number[] = []
 
     constructor(ref: FollowerReference) {
         this.ref = ref
         this.p = new Float64Array(ref.frameCount)
         this.scratch = new Float64Array(ref.frameCount)
         this.prefix = new Float64Array(ref.frameCount + 1)
+        // inverse chroma norms for posterior-weighted key voting (0 for silent frames)
+        this.refInvNorm = new Float64Array(ref.frameCount)
+        for (let i = 0; i < ref.frameCount; i++) {
+            let n = 0
+            const off = i * CHROMA_DIM
+            for (let d = 0; d < CHROMA_DIM; d++) n += ref.chroma[off + d] * ref.chroma[off + d]
+            this.refInvNorm[i] = n > 0 ? 1 / Math.sqrt(n) : 0
+        }
         // structural jump targets: song start + every slide mark
         const targets = new Set<number>([0])
         for (const m of ref.marks) targets.add(Math.min(ref.frameCount - 1, Math.max(0, m.frame)))
@@ -125,10 +149,17 @@ export class SongFollower {
         const p = this.p
         const next = this.scratch
 
-        // Estimate one global key shift for the performance. The live chroma is compared
-        // near the currently tracked position, so this costs very little compared with
-        // adding 12 transposition states to the full HMM.
-        if (!this.keyLocked && energy >= LOW_ENERGY) this.updatePitchShift(chroma)
+        // Estimate one global key shift for the performance. Until the key locks, the
+        // position tracker marginalises over keys (best shift per position) instead of
+        // committing to a provisional guess: a wrong early guess would steer the
+        // posterior somewhere wrong, and votes taken there would then "confirm" the
+        // wrong key — a feedback loop that locked tritones within seconds on quiet
+        // intros. Key votes are scored against the whole reference weighted by the
+        // position posterior (soft voting): when lost or diffuse no shift wins clearly
+        // and the frame abstains. Both cost ~12x a single cosine per reference frame
+        // but only run until the key locks. After locking, a cheap point check keeps
+        // validating and can still overturn a wrong lock (keyRecent window).
+        if (energy >= LOW_ENERGY) this.updatePitchShift(chroma)
 
         // ---- transition ----
         for (let i = 0; i < n; i++) {
@@ -150,14 +181,17 @@ export class SongFollower {
         for (const f of this.jumpFrames) next[f] += jumpShare
 
         // ---- emission ----
+        // Pre-lock the key is unknown, so each position scores its best shift
+        // (marginalising over keys). Post-lock positions score the locked shift.
         const liveQuiet = energy < LOW_ENERGY
+        const keyKnown = this.keyLocked
         let sum = 0
         for (let i = 0; i < n; i++) {
             const refQuiet = this.ref.energy[i] < LOW_ENERGY
             let sim: number
             if (liveQuiet && refQuiet) sim = 0.75
             else if (liveQuiet !== refQuiet) sim = liveQuiet ? 0.45 : 0.35
-            else sim = this.chromaSim(chroma, i)
+            else sim = keyKnown ? this.chromaSim(chroma, i) : this.maxChromaSim(chroma, i)
             next[i] *= Math.exp(BETA * (sim - 1))
             sum += next[i]
         }
@@ -198,9 +232,10 @@ export class SongFollower {
         }
         this._position = bestIndex
 
-        // acoustic quality at the tracked position (skip while the live signal is quiet)
+        // acoustic quality at the tracked position (skip while the live signal is quiet).
+        // Pre-lock the key is unknown, so quality is also key-agnostic (best shift).
         if (!liveQuiet && this.ref.energy[bestIndex] >= LOW_ENERGY) {
-            const sim = this.chromaSim(chroma, bestIndex)
+            const sim = this.keyLocked ? this.chromaSim(chroma, bestIndex) : this.maxChromaSim(chroma, bestIndex)
             this._quality = this._quality * (1 - QUALITY_EMA) + sim * QUALITY_EMA
         }
 
@@ -214,6 +249,17 @@ export class SongFollower {
 
     private chromaSim(live: Float32Array, refFrame: number): number {
         return this.chromaSimAtShift(live, refFrame, this.pitchShift)
+    }
+
+    // Best transposition at one reference frame — the key-marginalised match used
+    // while the performance key is still unknown.
+    private maxChromaSim(live: Float32Array, refFrame: number): number {
+        let best = 0
+        for (let shift = 0; shift < CHROMA_DIM; shift++) {
+            const sim = this.chromaSimAtShift(live, refFrame, shift)
+            if (sim > best) best = sim
+        }
+        return best
     }
 
     private chromaSimAtShift(live: Float32Array, refFrame: number, shift: number): number {
@@ -233,42 +279,146 @@ export class SongFollower {
     }
 
     private updatePitchShift(live: Float32Array) {
-        const lo = Math.max(0, this._position - KEY_SEARCH_FRAMES)
-        const hi = Math.min(this.ref.frameCount - 1, this._position + KEY_SEARCH_FRAMES)
-        let hasReferenceSignal = false
+        if (!this.keyLocked) {
+            this.voteKeySoft(live)
+            return
+        }
+        this.voteKeyRevalidate(live)
+    }
 
-        for (let shift = 0; shift < CHROMA_DIM; shift++) {
-            let best = 0
-            for (let frame = lo; frame <= hi; frame++) {
-                if (this.ref.energy[frame] < LOW_ENERGY) continue
-                hasReferenceSignal = true
-                best = Math.max(best, this.chromaSimAtShift(live, frame, shift))
+    // Pre-lock: score every shift against the full reference, weighted by where the
+    // tracker currently believes the song is. A diffuse posterior spreads weight
+    // everywhere so nothing wins clearly (abstain); a concentrated one votes
+    // decisively for the shift that matches there.
+    private voteKeySoft(live: Float32Array) {
+        let na = 0
+        for (let d = 0; d < CHROMA_DIM; d++) na += live[d] * live[d]
+        if (na <= 0) return
+        const invNa = 1 / Math.sqrt(na)
+
+        const scores = this.keyScores.fill(0)
+        let weight = 0
+        for (let i = 0; i < this.ref.frameCount; i++) {
+            if (this.ref.energy[i] < LOW_ENERGY) continue
+            const w = this.p[i]
+            if (w <= 0) continue
+            const invNb = this.refInvNorm[i]
+            if (invNb === 0) continue
+            weight += w
+            const scale = w * invNa * invNb
+            const off = i * CHROMA_DIM
+            for (let shift = 0; shift < CHROMA_DIM; shift++) {
+                let dot = 0
+                for (let d = 0; d < CHROMA_DIM; d++) dot += live[(d + shift) % CHROMA_DIM] * this.ref.chroma[off + d]
+                scores[shift] += scale * dot
             }
-            this.keyEvidence[shift] += best
+        }
+        if (weight <= 0) return
+        for (let shift = 0; shift < CHROMA_DIM; shift++) scores[shift] /= weight
+
+        let best = 0
+        let bestScore = -Infinity
+        let secondScore = -Infinity
+        for (let shift = 0; shift < CHROMA_DIM; shift++) {
+            const s = scores[shift]
+            if (s > bestScore) {
+                secondScore = bestScore
+                bestScore = s
+                best = shift
+            } else if (s > secondScore) {
+                secondScore = s
+            }
         }
 
-        if (!hasReferenceSignal) return
+        // Unclear frame (noise matches every shift alike, or nothing matches well):
+        // abstain. Random votes from confused frames are what used to lock a wrong
+        // key (e.g. tritone +6) within seconds on quiet intros under room noise.
+        if (bestScore < KEY_VOTE_MIN_SIM || bestScore - secondScore < KEY_VOTE_MIN_MARGIN) return
+
+        this.keyEvidence[best] += bestScore
         this.keyFrames++
 
-        let bestShift = 0
-        let second = -Infinity
-        for (let shift = 1; shift < CHROMA_DIM; shift++) {
-            if (this.keyEvidence[shift] > this.keyEvidence[bestShift]) {
-                second = this.keyEvidence[bestShift]
-                bestShift = shift
-            } else {
-                second = Math.max(second, this.keyEvidence[shift])
-            }
-        }
-        // Use the best provisional shift immediately so a transposed performance does
-        // not push the position posterior off course while calibration accumulates.
-        this.pitchShift = bestShift
+        this.electProvisionalKey()
         if (this.keyFrames < KEY_MIN_FRAMES) return
 
-        const margin = (this.keyEvidence[bestShift] - second) / this.keyFrames
+        const margin = (this.keyEvidence[this.pitchShift] - this.secondEvidence()) / this.keyFrames
         if (margin >= KEY_MARGIN || this.keyFrames >= KEY_MAX_FRAMES) {
             this.keyLocked = true
         }
+    }
+
+    // Use the best provisional shift immediately so a transposed performance does
+    // not push the position posterior off course while calibration accumulates.
+    private electProvisionalKey() {
+        let bestShift = 0
+        for (let shift = 1; shift < CHROMA_DIM; shift++) {
+            if (this.keyEvidence[shift] > this.keyEvidence[bestShift]) bestShift = shift
+        }
+        this.pitchShift = bestShift
+    }
+
+    private secondEvidence(): number {
+        let second = -Infinity
+        for (let shift = 0; shift < CHROMA_DIM; shift++) {
+            if (shift !== this.pitchShift) second = Math.max(second, this.keyEvidence[shift])
+        }
+        return second
+    }
+
+    // Post-lock: cheap point check near the tracked position. Votes still only come
+    // from clear frames, so diffuse/noisy stretches pause revalidation instead of
+    // triggering flips. A sustained run of clear votes against the locked shift
+    // means the lock was taken while lost — flip to the better shift.
+    private voteKeyRevalidate(live: Float32Array) {
+        const lo = Math.max(0, this._position - KEY_SEARCH_FRAMES)
+        const hi = Math.min(this.ref.frameCount - 1, this._position + KEY_SEARCH_FRAMES)
+
+        let hasReferenceSignal = false
+        for (let frame = lo; frame <= hi; frame++) {
+            if (this.ref.energy[frame] >= LOW_ENERGY) {
+                hasReferenceSignal = true
+                break
+            }
+        }
+        if (!hasReferenceSignal) return
+
+        let best = 0
+        let bestSim = -Infinity
+        let secondSim = -Infinity
+        for (let shift = 0; shift < CHROMA_DIM; shift++) {
+            let sim = 0
+            for (let frame = lo; frame <= hi; frame++) {
+                if (this.ref.energy[frame] < LOW_ENERGY) continue
+                sim = Math.max(sim, this.chromaSimAtShift(live, frame, shift))
+            }
+            if (sim > bestSim) {
+                secondSim = bestSim
+                bestSim = sim
+                best = shift
+            } else if (sim > secondSim) {
+                secondSim = sim
+            }
+        }
+
+        if (bestSim < KEY_VOTE_MIN_SIM || bestSim - secondSim < KEY_VOTE_MIN_MARGIN) return
+
+        this.keyRecent.push(best)
+        if (this.keyRecent.length > KEY_REVALIDATE_WINDOW) this.keyRecent.shift()
+        if (this.keyRecent.length < KEY_REVALIDATE_WINDOW) return
+
+        const counts = new Array<number>(CHROMA_DIM).fill(0)
+        for (const vote of this.keyRecent) counts[vote]++
+        let challenger = -1
+        for (let shift = 0; shift < CHROMA_DIM; shift++) {
+            if (shift !== this.pitchShift && counts[shift] >= KEY_REVALIDATE_FLIP) challenger = shift
+        }
+        if (challenger < 0) return
+
+        this.pitchShift = challenger
+        this.keyEvidence.fill(0)
+        this.keyEvidence[challenger] = KEY_REVALIDATE_FLIP
+        this.keyFrames = KEY_REVALIDATE_FLIP
+        this.keyRecent = []
     }
 }
 

@@ -1,6 +1,6 @@
 <script lang="ts">
     import { autoLyricsController } from "../../audio/lyrics/autoLyricsController"
-    import { activePopup, autoLyrics, special } from "../../stores"
+    import { activePopup, ai, autoLyrics, popupData, special } from "../../stores"
     import { translateText } from "../../utils/language"
     import Icon from "../helpers/Icon.svelte"
     import T from "../helpers/T.svelte"
@@ -9,35 +9,33 @@
     // only shown in suggest mode (auto mode navigates without asking)
     $: suggestion = $special.autoLyrics?.mode === "auto" ? null : $autoLyrics.suggestion
 
-    // compact live pill so the operator can see the follower working (or failing) at a glance
+    // Live status lives on the AI (STT) circle — this overlay only renders a compact
+    // fallback circle when that bubble is absent (AI disabled). No separate pill.
+    // It shows whenever the mic is live, even before any song is on the output.
     $: enabled = !!$special.autoLyrics?.enabled
     $: hasError = enabled && $autoLyrics.status === "error"
-    $: follow = $autoLyrics.status === "listening" ? $autoLyrics.follow : null
-    $: showPill = hasError || (!!follow && follow.state !== "idle")
+    $: live = enabled && $autoLyrics.status === "listening"
+    $: follow = live ? $autoLyrics.follow : null
+    $: showFallback = !$ai.enabled && (live || hasError)
+
+    function openPopup() {
+        popupData.set({})
+        activePopup.set("auto_lyrics")
+    }
 
     function formatTime(totalSeconds: number) {
         const m = Math.floor(totalSeconds / 60)
         const s = Math.floor(totalSeconds % 60)
         return `${m}:${s.toString().padStart(2, "0")}`
     }
+
+    $: title = hasError ? $autoLyrics.errorMsg || "Error" : follow ? `${follow.songName || ""}\n${translateText(`settings.auto_lyrics_follow_${follow.state}`)}${follow.state === "learning" ? ` · ${formatTime(follow.passSeconds || 0)}` : follow.state === "following" || follow.state === "lost" ? ` · ${translateText("settings.auto_lyrics_slide")} ${follow.slideIndex + 1}/${follow.slideCount} · ${follow.confidence}%` : ""}` : translateText("settings.auto_lyrics_waiting_song")
 </script>
 
-{#if showPill}
-    <button class="pill" title={hasError ? $autoLyrics.errorMsg || "" : follow?.songName} on:click={() => activePopup.set("auto_lyrics")}>
-        {#if hasError}
-            <span class="dot error"></span>
-            <span class="state"><T id="settings.auto_lyrics_status_error" /></span>
-        {:else if follow}
-            <span class="dot {follow.state}"></span>
-            <span class="state"><T id="settings.auto_lyrics_follow_{follow.state}" /></span>
-            {#if follow.state === "learning"}
-                <span class="detail">{formatTime(follow.passSeconds || 0)}</span>
-                {#if follow.passUsable}<Icon id="check" size={0.75} />{/if}
-            {:else if follow.state === "following" || follow.state === "lost"}
-                <span class="detail">{follow.slideIndex + 1}/{follow.slideCount}</span>
-                <span class="confidence">{follow.confidence}%</span>
-            {/if}
-        {/if}
+{#if showFallback}
+    <button class="circle state-{follow?.state || 'idle'}" class:error={hasError} {title} on:click={openPopup} aria-label="Auto Lyrics">
+        <Icon id="lyrics" size={1.2} white />
+        <span class="dot {follow?.state || 'idle'}" class:error={hasError}></span>
     </button>
 {/if}
 
@@ -62,55 +60,68 @@
 {/if}
 
 <style>
-    .pill {
+    .circle {
         position: fixed;
-        bottom: 12px;
-        right: 12px;
+        bottom: 45px;
+        right: 45px;
         z-index: 4890;
+
+        width: 46px;
+        height: 46px;
+        border-radius: 50%;
+        background-color: var(--primary-darkest);
+        border: 2px solid var(--primary-lighter);
+        box-shadow: 0 2px 8px rgb(0 0 0 / 0.35);
+        cursor: pointer;
 
         display: flex;
         align-items: center;
-        gap: 7px;
-
-        padding: 4px 10px;
-        background-color: var(--primary-darkest);
-        border: 1px solid var(--primary-lighter);
-        border-radius: 20px;
-        box-shadow: 0 2px 8px rgb(0 0 0 / 0.35);
-        font-size: 0.8em;
+        justify-content: center;
         opacity: 0.92;
-
         color: inherit;
         font-family: inherit;
-        cursor: pointer;
     }
-    .pill:hover {
+    .circle:hover {
         opacity: 1;
         border-color: var(--secondary);
     }
-    .pill .state {
-        font-weight: bold;
+    .circle.state-learning {
+        border-color: #e0a800;
     }
-    .pill .detail {
-        opacity: 0.75;
+    .circle.state-following {
+        border-color: #54c469;
     }
-    .dot {
-        width: 8px;
-        height: 8px;
+    .circle.error {
+        border-color: #ff5050;
+    }
+    .circle .dot {
+        position: absolute;
+        bottom: 0;
+        right: 0;
+        width: 12px;
+        height: 12px;
         border-radius: 50%;
-        flex-shrink: 0;
+        background-color: #888;
+        border: 2px solid var(--primary-darkest);
     }
-    .dot.learning {
+    .circle .dot.learning {
         background-color: #e0a800;
+        animation: pulse 1.2s ease-in-out infinite;
     }
-    .dot.following {
+    .circle .dot.following {
         background-color: #54c469;
     }
-    .dot.lost {
-        background-color: #888;
-    }
-    .dot.error {
+    .circle .dot.error {
         background-color: #ff5050;
+    }
+    @keyframes pulse {
+        0%,
+        100% {
+            opacity: 1;
+        }
+        50% {
+            opacity: 0.35;
+        }
     }
 
     .suggestion {

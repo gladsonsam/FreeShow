@@ -160,6 +160,20 @@
         activePage.set("show")
         activePopup.set(null)
     }
+
+    // TEACHING ACTIONS (explicit — navigating on your own never trains anything)
+
+    function teach() {
+        autoLyricsController.teachCurrentSong()
+    }
+
+    async function finishTeaching() {
+        await autoLyricsController.finishTeaching(true)
+    }
+
+    async function discardTeaching() {
+        await autoLyricsController.finishTeaching(false)
+    }
 </script>
 
 <MaterialToggleSwitch label="settings.auto_lyrics_enable" checked={settings.enabled} defaultValue={false} on:change={(e) => update("enabled", e.detail)} />
@@ -185,6 +199,48 @@
     </div>
 
     <div class="note"><T id="settings.auto_lyrics_follow_note" /></div>
+
+    {#if !follow}
+        <div class="hero">
+            <Icon id="microphone" size={1.4} />
+            <div class="heroText">
+                <strong>{statusText}</strong>
+                <span><T id="settings.auto_lyrics_waiting_song" /></span>
+            </div>
+        </div>
+    {:else if follow.state === "ready"}
+        <div class="hero">
+            <Icon id="lyrics" size={1.4} />
+            <div class="heroText">
+                <strong>{follow.songName}</strong>
+                <span><T id="settings.auto_lyrics_follow_ready" /> · <T id="settings.auto_lyrics_not_learned_hint" /></span>
+            </div>
+            <MaterialButton variant="contained" on:click={teach}><T id="settings.auto_lyrics_teach" /></MaterialButton>
+        </div>
+    {:else if follow.state === "learning"}
+        <div class="hero teaching">
+            <span class="dot learning pulse"></span>
+            <div class="heroText">
+                <strong>{follow.songName}</strong>
+                <span>{formatTime(follow.passSeconds || 0)} · {follow.passSlides || 0}/{follow.slideCount} <T id="settings.auto_lyrics_slides" /></span>
+                {#if follow.passUsable}<span class="detail ok"><Icon id="check" size={0.8} /> <T id="settings.auto_lyrics_pass_ok" /></span>{/if}
+                <span class="hint"><T id="settings.auto_lyrics_teaching_hint" /></span>
+            </div>
+            <div class="heroActions">
+                <MaterialButton variant="contained" on:click={finishTeaching}><T id="settings.auto_lyrics_finish_save" /></MaterialButton>
+                <MaterialButton on:click={discardTeaching}><T id="settings.auto_lyrics_discard" /></MaterialButton>
+            </div>
+        </div>
+    {:else if follow.state === "following" || follow.state === "lost"}
+        <div class="hero">
+            <span class="dot {follow.state}"></span>
+            <div class="heroText">
+                <strong>{follow.songName}</strong>
+                <span>{followStateText} · {translateText("settings.auto_lyrics_slide")} {follow.slideIndex + 1}/{follow.slideCount} · {follow.confidence}%</span>
+            </div>
+            <MaterialButton variant="outlined" on:click={teach} small><T id="settings.auto_lyrics_reteach" /></MaterialButton>
+        </div>
+    {/if}
 
     <MaterialDropdown label="settings.auto_lyrics_mode" value={settings.mode} options={modeOptions} on:change={(e) => update("mode", e.detail)} />
     <MaterialDropdown label="settings.auto_lyrics_mic" value={settings.micId} options={micOptions} allowEmpty on:change={(e) => update("micId", e.detail)} />
@@ -331,6 +387,64 @@
         font-size: 0.8em;
         opacity: 0.6;
         font-style: italic;
+    }
+
+    .hero {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+
+        margin: 10px 0;
+        padding: 10px 12px;
+        background-color: rgb(0 0 20 / 0.15);
+        border-radius: 4px;
+    }
+    .hero.teaching {
+        border-left: 3px solid #e0a800;
+    }
+    .heroText {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        flex: 1;
+        min-width: 0;
+        font-size: 0.85em;
+    }
+    .heroText > strong {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .heroText > span {
+        opacity: 0.7;
+    }
+    .heroText .hint {
+        font-size: 0.85em;
+        font-style: italic;
+    }
+    .heroText .detail.ok {
+        color: #54c469;
+        opacity: 1;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .heroActions {
+        display: flex;
+        gap: 8px;
+        flex-shrink: 0;
+    }
+    .dot.pulse {
+        animation: pulse 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+        0%,
+        100% {
+            opacity: 1;
+        }
+        50% {
+            opacity: 0.35;
+        }
     }
 
     .cueRecorder {

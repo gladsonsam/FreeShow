@@ -247,6 +247,30 @@ class AutoLyricsControllerClass {
         return firstLine || `Slide ${index + 1}`
     }
 
+    // Explicit teaching: nothing is recorded unless the operator starts it.
+    // Teach = first map for this song; re-teach while following replaces the timing.
+    teachCurrentSong() {
+        if (!this.followEngine) return false
+        if (get(autoLyrics).status !== "listening") {
+            newToast(translateText("toast.auto_lyrics_error"))
+            return false
+        }
+        if (!this.lastOutShowId) {
+            newToast(translateText("toast.auto_lyrics_no_song"))
+            return false
+        }
+        this.followEngine.startTeaching()
+        return true
+    }
+
+    async finishTeaching(save: boolean) {
+        if (!this.followEngine) return
+        const { saved, songName } = await this.followEngine.finishTeaching(save)
+        this.updateSavedSongs()
+        if (save && !saved) newToast(translateText("toast.auto_lyrics_not_enough"))
+        else if (!save) newToast(translateText("toast.auto_lyrics_discarded") + (songName ? `: ${songName}` : ""))
+    }
+
     async forgetCurrentSong() {
         await this.followEngine?.forgetCurrentSong()
         this.updateSavedSongs()
@@ -310,34 +334,39 @@ class AutoLyricsControllerClass {
     }
 
     private watchNavigation() {
-        this.outputsUnsub = outputs.subscribe(() => {
-            const out = this.getActiveOutput()
-            const slide = out?.slide
-            const index = slide?.index ?? null
-            const showId = slide?.id || ""
-            const layoutId = slide?.layout || ""
+        this.outputsUnsub = outputs.subscribe(() => this.syncFromOutput())
+        // the song may already be live when Auto Lyrics is switched on — engage
+        // immediately instead of waiting for the next click
+        this.syncFromOutput()
+    }
 
-            const songChanged = showId !== this.lastOutShowId || (!!showId && layoutId !== this.lastOutLayoutId)
-            const slideChanged = index !== this.lastOutIndex || songChanged
+    private syncFromOutput() {
+        const out = this.getActiveOutput()
+        const slide = out?.slide
+        const index = slide?.index ?? null
+        const showId = slide?.id || ""
+        const layoutId = slide?.layout || ""
 
-            // drop any stale suggestion when the operator navigates
-            if (slideChanged && !this.selfNavigating && get(autoLyrics).suggestion) {
-                this.setSuggestion(null)
+        const songChanged = showId !== this.lastOutShowId || (!!showId && layoutId !== this.lastOutLayoutId)
+        const slideChanged = index !== this.lastOutIndex || songChanged
+
+        // drop any stale suggestion when the operator navigates
+        if (slideChanged && !this.selfNavigating && get(autoLyrics).suggestion) {
+            this.setSuggestion(null)
+        }
+
+        if (this.followEngine) {
+            if (songChanged) {
+                const ctx = showId ? this.buildSongContext() : null
+                this.followEngine.setSong(ctx).then(() => this.updateSavedSongs())
+            } else if (slideChanged && index !== null) {
+                this.followEngine.notifySlide(index, !this.selfNavigating)
             }
+        }
 
-            if (this.followEngine) {
-                if (songChanged) {
-                    const ctx = showId ? this.buildSongContext() : null
-                    this.followEngine.setSong(ctx).then(() => this.updateSavedSongs())
-                } else if (slideChanged && index !== null) {
-                    this.followEngine.notifySlide(index, !this.selfNavigating)
-                }
-            }
-
-            this.lastOutIndex = index
-            this.lastOutShowId = showId || null
-            this.lastOutLayoutId = layoutId || null
-        })
+        this.lastOutIndex = index
+        this.lastOutShowId = showId || null
+        this.lastOutLayoutId = layoutId || null
     }
 
     isActive() {

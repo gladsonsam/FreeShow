@@ -1,6 +1,7 @@
-// Records one pass through a song: the chroma timeline plus a mark for every slide
-// change. The first (manual) pass teaches the follower; later passes can replace the
-// stored map when the operator had to correct the follower (their timing wins).
+// Records one explicitly taught pass through a song: the chroma timeline plus a mark
+// for every slide change. The first teach stores the song's map; a later re-teach
+// replaces it when the operator corrected the timing (their timing wins) — follow
+// passes are never recorded, so maps only change when asked.
 
 import { CHROMA_DIM, CHROMA_FPS, type ChromaFrame } from "./chromaFeatures"
 import type { SongMap, SongMark } from "./songMap"

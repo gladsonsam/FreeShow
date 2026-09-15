@@ -1,10 +1,12 @@
 <script lang="ts">
     import { onDestroy } from "svelte"
     import { fade } from "svelte/transition"
+    import Icon from "../../../components/helpers/Icon.svelte"
     import MaterialButton from "../../../components/inputs/MaterialButton.svelte"
     import MaterialToggleSwitch from "../../../components/inputs/MaterialToggleSwitch.svelte"
     import Tabs from "../../../components/main/Tabs.svelte"
-    import { activePage, ai, aiSmartAction, aiSttStatus, language, mediaDownloads, settingsTab, sttTempDisabled, sttTranscript } from "../../../stores"
+    import { activePage, activePopup, ai, aiSmartAction, aiSttStatus, autoLyrics, language, mediaDownloads, popupData, settingsTab, special, sttTempDisabled, sttTranscript } from "../../../stores"
+    import { translateText } from "../../../utils/language"
     import { audioLevelStore, resolveSttEngine, SpeechToText } from "../../stt/stt"
     import AiChat from "./AiChat.svelte"
     import AiRing from "./AiRing.svelte"
@@ -180,6 +182,31 @@
         settingsTab.set("ai")
         activePage.set("settings")
     }
+
+    // AUTO LYRICS BADGE (shares this circle instead of its own pill)
+    $: lyricsEnabled = !!$special.autoLyrics?.enabled
+    $: lyricsError = lyricsEnabled && $autoLyrics.status === "error"
+    $: lyricsLive = lyricsEnabled && $autoLyrics.status === "listening"
+    $: lyricsFollow = lyricsLive ? $autoLyrics.follow : null
+    $: showLyricsBadge = !isOpen && (lyricsLive || lyricsError)
+
+    function formatLyricsTime(totalSeconds: number) {
+        const m = Math.floor(totalSeconds / 60)
+        const s = Math.floor(totalSeconds % 60)
+        return `${m}:${s.toString().padStart(2, "0")}`
+    }
+
+    $: lyricsTitle = lyricsError
+        ? $autoLyrics.errorMsg || "Error"
+        : lyricsFollow
+          ? `${lyricsFollow.songName || ""}\n${translateText(`settings.auto_lyrics_follow_${lyricsFollow.state}`)}${lyricsFollow.state === "learning" ? ` · ${formatLyricsTime(lyricsFollow.passSeconds || 0)}` : lyricsFollow.state === "following" || lyricsFollow.state === "lost" ? ` · ${translateText("settings.auto_lyrics_slide")} ${lyricsFollow.slideIndex + 1}/${lyricsFollow.slideCount} · ${lyricsFollow.confidence}%` : ""}`
+          : translateText("settings.auto_lyrics_waiting_song")
+
+    function openLyricsPopup(e: MouseEvent) {
+        e.stopPropagation()
+        popupData.set({})
+        activePopup.set("auto_lyrics")
+    }
 </script>
 
 <svelte:window on:keydown={(e) => isOpen && e.key === "Escape" && toggleExpand()} />
@@ -193,6 +220,11 @@
 {/if}
 
 <div class="speech-widget {isOpen ? 'is-open' : 'is-closed'}">
+    {#if showLyricsBadge}
+        <button class="lyrics-badge state-{lyricsFollow?.state || 'idle'}" class:error={lyricsError} title={lyricsTitle} on:click={openLyricsPopup} aria-label="Auto Lyrics">
+            <Icon id="lyrics" size={0.85} white />
+        </button>
+    {/if}
     <AiRing {state} {audioLevel} borderRadius={isOpen ? "20px" : "50%"} opacity={state === "inactive" || isOpen ? 0.8 : 0.4} fill {wordConfirmTick} {wordConfirmDurationMs}>
         {#if !isOpen}
             <AiVisual {state} on:click={toggleExpand} />
@@ -254,6 +286,56 @@
         width: 62px;
         height: 62px;
         transform: translate(0, 0);
+    }
+
+    /* auto-lyrics status badge sharing the STT circle (no separate pill) */
+    .lyrics-badge {
+        position: absolute;
+        top: -7px;
+        left: -7px;
+        z-index: 2;
+
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background-color: rgb(17 24 39 / 0.95);
+        border: 2px solid #888;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+        cursor: pointer;
+
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        color: inherit;
+    }
+    .lyrics-badge:hover {
+        transform: scale(1.12);
+    }
+    .lyrics-badge.state-ready {
+        border-color: #7cc7ff;
+    }
+    .lyrics-badge.state-learning {
+        border-color: #e0a800;
+        animation: lyricsPulse 1.2s ease-in-out infinite;
+    }
+    .lyrics-badge.state-following {
+        border-color: #54c469;
+    }
+    .lyrics-badge.state-lost {
+        border-color: #888;
+    }
+    .lyrics-badge.error {
+        border-color: #ff5050;
+    }
+    @keyframes lyricsPulse {
+        0%,
+        100% {
+            opacity: 1;
+        }
+        50% {
+            opacity: 0.45;
+        }
     }
     .speech-widget.is-open {
         bottom: 50%;

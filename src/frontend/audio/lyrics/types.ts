@@ -1,8 +1,8 @@
 // Auto Lyrics — shared types
 //
-// Learn & Follow: learns a song's audio timeline the first time it is played (the
-// operator navigates as usual), then tracks the live audio position on later plays
-// and changes slides automatically. Fully offline and language-independent.
+// Teach & Follow: the operator teaches a song's audio timeline once (explicitly),
+// then the engine tracks the live audio position on later plays and changes slides
+// automatically. Fully offline and language-independent.
 
 import type { FollowRuntime } from "./followEngine"
 
@@ -19,7 +19,7 @@ export interface AutoLyricsSettings {
 
 export const AUTO_LYRICS_DEFAULTS: AutoLyricsSettings = {
     enabled: false,
-    mode: "suggest",
+    mode: "auto",
     micId: "",
     threshold: 55,
     leadMs: 400
