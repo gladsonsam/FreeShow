@@ -237,6 +237,7 @@
             <div class="heroText">
                 <strong>{follow.songName}</strong>
                 <span>{followStateText} · {translateText("settings.auto_lyrics_slide")} {follow.slideIndex + 1}/{follow.slideCount} · {follow.confidence}%</span>
+                {#if follow.held}<span class="hint"><T id="settings.auto_lyrics_holding" /></span>{/if}
             </div>
             <MaterialButton variant="outlined" on:click={teach} small><T id="settings.auto_lyrics_reteach" /></MaterialButton>
         </div>

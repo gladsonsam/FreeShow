@@ -199,7 +199,7 @@
     $: lyricsTitle = lyricsError
         ? $autoLyrics.errorMsg || "Error"
         : lyricsFollow
-          ? `${lyricsFollow.songName || ""}\n${translateText(`settings.auto_lyrics_follow_${lyricsFollow.state}`)}${lyricsFollow.state === "learning" ? ` · ${formatLyricsTime(lyricsFollow.passSeconds || 0)}` : lyricsFollow.state === "following" || lyricsFollow.state === "lost" ? ` · ${translateText("settings.auto_lyrics_slide")} ${lyricsFollow.slideIndex + 1}/${lyricsFollow.slideCount} · ${lyricsFollow.confidence}%` : ""}`
+          ? `${lyricsFollow.songName || ""}\n${translateText(`settings.auto_lyrics_follow_${lyricsFollow.state}`)}${lyricsFollow.state === "learning" ? ` · ${formatLyricsTime(lyricsFollow.passSeconds || 0)}` : lyricsFollow.state === "following" || lyricsFollow.state === "lost" ? ` · ${translateText("settings.auto_lyrics_slide")} ${lyricsFollow.slideIndex + 1}/${lyricsFollow.slideCount} · ${lyricsFollow.confidence}%` : ""}${lyricsFollow.held ? `\n${translateText("settings.auto_lyrics_holding")}` : ""}`
           : translateText("settings.auto_lyrics_waiting_song")
 
     function openLyricsPopup(e: MouseEvent) {

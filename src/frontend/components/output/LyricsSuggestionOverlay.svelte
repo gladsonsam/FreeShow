@@ -29,7 +29,11 @@
         return `${m}:${s.toString().padStart(2, "0")}`
     }
 
-    $: title = hasError ? $autoLyrics.errorMsg || "Error" : follow ? `${follow.songName || ""}\n${translateText(`settings.auto_lyrics_follow_${follow.state}`)}${follow.state === "learning" ? ` · ${formatTime(follow.passSeconds || 0)}` : follow.state === "following" || follow.state === "lost" ? ` · ${translateText("settings.auto_lyrics_slide")} ${follow.slideIndex + 1}/${follow.slideCount} · ${follow.confidence}%` : ""}` : translateText("settings.auto_lyrics_waiting_song")
+    $: title = hasError
+        ? $autoLyrics.errorMsg || "Error"
+        : follow
+          ? `${follow.songName || ""}\n${translateText(`settings.auto_lyrics_follow_${follow.state}`)}${follow.state === "learning" ? ` · ${formatTime(follow.passSeconds || 0)}` : follow.state === "following" || follow.state === "lost" ? ` · ${translateText("settings.auto_lyrics_slide")} ${follow.slideIndex + 1}/${follow.slideCount} · ${follow.confidence}%` : ""}${follow.held ? `\n${translateText("settings.auto_lyrics_holding")}` : ""}`
+          : translateText("settings.auto_lyrics_waiting_song")
 </script>
 
 {#if showFallback}

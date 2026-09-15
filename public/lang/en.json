@@ -1357,6 +1357,7 @@
         "auto_lyrics_follow_learning": "Teaching song",
         "auto_lyrics_follow_following": "Following",
         "auto_lyrics_follow_lost": "Waiting for match",
+        "auto_lyrics_holding": "Holding while you navigate — resumes on its own",
         "auto_lyrics_teach": "Teach this song",
         "auto_lyrics_teaching_hint": "Run the song as normal and navigate every slide. Switching songs or pressing Finish saves it.",
         "auto_lyrics_finish_save": "Finish & save",

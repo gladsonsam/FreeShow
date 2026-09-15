@@ -12,7 +12,9 @@
 // Follow passes are never recorded and never overwrite the map: timing only changes
 // through an explicit re-teach (startTeaching while following, then finishTeaching).
 // The operator always wins: manual navigation re-anchors the follower and pauses
-// decisions briefly. No network, no models — everything runs locally.
+// decisions briefly, and rapid manual moves (browsing/driving the slides) engage a
+// hold that pauses firing until the tracker agrees with the parked slide or the
+// operator walks away. No network, no models — everything runs locally.
 
 import { ChromaExtractor, CHROMA_FPS } from "./chromaFeatures"
 import { SongFollower } from "./songFollower"
@@ -38,6 +40,7 @@ export interface FollowRuntime {
     slideCount: number
     confidence: number // 0-100
     hasMap: boolean
+    held: boolean // operator is driving: tracking continues, firing is paused
     passSeconds: number // audio recorded in the current pass
     passSlides: number // distinct slides covered in the current pass
     passUsable: boolean // current pass is good enough to be saved as a map
@@ -63,6 +66,14 @@ const MIN_FIRE_QUALITY = 0.5
 const LOST_QUALITY = 0.45
 const LOST_CONFIDENCE = 0.35
 const LOST_AFTER_FRAMES = CHROMA_FPS * 3
+// Operator-drive hold: clicking through slides goes live, so rapid manual moves mean
+// the operator is browsing/driving, not correcting once. Two manual moves within this
+// window hands control over: the tracker keeps listening (re-anchored per click) but
+// stops firing and suggesting until it either agrees with the parked slide or the
+// operator walks away.
+const HOLD_DRIVE_WINDOW_FRAMES = CHROMA_FPS * 6
+const HOLD_AGREE_QUIET_FRAMES = CHROMA_FPS * 3
+const HOLD_RELEASE_QUIET_FRAMES = CHROMA_FPS * 15
 
 export class FollowEngine {
     private extractor = new ChromaExtractor()
@@ -83,6 +94,11 @@ export class FollowEngine {
     private lostFrames = 0
     private lastConfidence = 0
     private framesSinceRuntimePush = 0
+    // operator-drive hold bookkeeping (100 ms blocks, same cadence as chroma frames)
+    private clockBlocks = 0
+    private held = false
+    private manualMoveBlocks: number[] = []
+    private lastManualBlock = -1
 
     private decisionCb: ((d: FollowDecision) => void) | null = null
     private runtimeCb: ((r: FollowRuntime) => void) | null = null
@@ -212,7 +228,10 @@ export class FollowEngine {
         this.state = "learning"
     }
 
-    // Output slide index changed within the current song
+    // Output slide index changed within the current song.
+    // Manual moves re-anchor the tracker; rapid manual moves (browsing/driving)
+    // engage the hold: tracking continues, but firing pauses until the operator
+    // settles. Recording a teaching pass is unaffected — marks are just marks.
     notifySlide(index: number, manual: boolean) {
         if (!this.song || index === this.lastOutputIndex) return
         this.lastOutputIndex = index
@@ -223,14 +242,35 @@ export class FollowEngine {
             this.follower.anchorToSlide(index)
             this.cooldownFrames = MANUAL_COOLDOWN_FRAMES
             this.resetCandidate()
+            this.noteManualMove()
         } else if (!manual) {
             this.cooldownFrames = Math.max(this.cooldownFrames, FIRE_COOLDOWN_FRAMES)
         }
         this.pushRuntime(true)
     }
 
+    private noteManualMove() {
+        this.lastManualBlock = this.clockBlocks
+        this.manualMoveBlocks.push(this.clockBlocks)
+        while (this.manualMoveBlocks.length && this.clockBlocks - this.manualMoveBlocks[0] > HOLD_DRIVE_WINDOW_FRAMES) this.manualMoveBlocks.shift()
+        if (!this.held && this.manualMoveBlocks.length >= 2 && this.follower) this.held = true
+    }
+
+    // While held the operator is driving: keep listening (and re-anchoring per
+    // click, handled in notifySlide) but never fire. Release when the tracker
+    // agrees with the parked slide, or unconditionally once the operator has
+    // been quiet long enough that hands-free duty resumes.
+    private updateHold(update: { slideIndex: number; confidence: number }): boolean {
+        if (!this.held) return false
+        const quiet = this.clockBlocks - this.lastManualBlock
+        const agrees = update.slideIndex === this.lastOutputIndex && update.confidence >= this.minConfidence
+        if ((agrees && quiet >= HOLD_AGREE_QUIET_FRAMES) || quiet >= HOLD_RELEASE_QUIET_FRAMES) this.held = false
+        return this.held
+    }
+
     handleBlock(pcm: Float32Array) {
         if (!this.song) return
+        this.clockBlocks++
         const frames = this.extractor.push(pcm)
         for (const frame of frames) {
             this.recorder?.record(frame)
@@ -253,8 +293,9 @@ export class FollowEngine {
 
         if (this.cooldownFrames > 0) this.cooldownFrames--
 
+        const held = this.updateHold(update)
         const target = this.follower!.slideAt(update.position + this.leadFrames)
-        if (target !== this.lastOutputIndex && this.state === "following") {
+        if (!held && target !== this.lastOutputIndex && this.state === "following") {
             if (target === this.candidateSlide) this.candidateFrames++
             else {
                 this.candidateSlide = target
@@ -384,6 +425,9 @@ export class FollowEngine {
         this.lastConfidence = 0
         this.lastOutputIndex = -1
         this.framesSinceRuntimePush = 0
+        this.held = false
+        this.manualMoveBlocks = []
+        this.lastManualBlock = -1
     }
 
     private pushRuntime(force = false) {
@@ -397,6 +441,7 @@ export class FollowEngine {
             slideCount: this.song?.slideCount || 0,
             confidence: Math.round(this.lastConfidence * 100),
             hasMap: this.hasMap,
+            held: this.held,
             passSeconds: this.recorder ? Math.round(this.recorder.frames / CHROMA_FPS) : 0,
             passSlides: this.recorder ? this.recorder.coveredSlides() : 0,
             passUsable: this.recorder?.isUsable() || false
