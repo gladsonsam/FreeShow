@@ -22,3 +22,6 @@ test-results/
 *.ipr
 *.iws
 .serena
+
+# Build-time Windows helper exe (see scripts/preBuild.js)
+public/assets/bin/ppt-to-pdf-helper.exe

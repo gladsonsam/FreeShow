@@ -57,3 +57,25 @@ function getPdfWorkerFile() {
 
 if (process.env.NODE_ENV === "production") generateProdConfigs()
 getPdfWorkerFile()
+compileWindowsHelpers()
+
+// Build the Windows-only helper exes at build time (cf. aero-peek-helper).
+// Silent no-op off Windows, or when already built / no compiler available.
+function compileWindowsHelpers() {
+    if (process.platform !== "win32") return
+    try {
+        const { spawnSync } = require("child_process")
+        const helperDir = join(__dirname, "ppt-to-pdf-helper")
+        const outPath = join(__dirname, "..", "public", "assets", "bin", "ppt-to-pdf-helper.exe")
+        if (!existsSync(join(helperDir, "PptToPdfHelper.cs"))) return
+        if (existsSync(outPath)) return
+
+        const csc = "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe"
+        if (!existsSync(csc)) return
+
+        const res = spawnSync(csc, ["/target:exe", "/out:" + outPath, "PptToPdfHelper.cs"], { cwd: helperDir, stdio: "ignore", windowsHide: true })
+        if (res.status !== 0) console.warn("Could not compile ppt-to-pdf-helper.exe (PPT import will fall back to LibreOffice)")
+    } catch (err) {
+        console.warn("Could not compile ppt-to-pdf-helper.exe:", err)
+    }
+}

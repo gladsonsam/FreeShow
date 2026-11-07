@@ -1,4 +1,5 @@
 import { execFile } from "child_process"
+import { app } from "electron"
 import fs from "fs"
 import path from "path"
 import { promisify } from "util"
@@ -75,8 +76,11 @@ async function convertWithPowerPoint(inputPath: string, outputPath: string): Pro
 
     try {
         if (isWindows) {
-            const script = `param($in,$out); $ppt = New-Object -ComObject PowerPoint.Application; try { $ppt.DisplayAlerts = 1; $doc = $ppt.Presentations.Open([IO.Path]::GetFullPath($in), -1, 0, 0); $doc.SaveAs([IO.Path]::GetFullPath($out), 32); $doc.Close() } finally { $ppt.Quit(); [Runtime.InteropServices.Marshal]::ReleaseComObject($ppt) | Out-Null }`
-            await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script, inputPath, outputPath], { timeout: 60000 })
+            // No powershell: it got releases flagged by antivirus (#3476).
+            // Prebuilt helper does the same COM work (cf. aero-peek-helper).
+            const helperPath = getPptHelperPath()
+            if (!helperPath) return false
+            await execFileAsync(helperPath, [inputPath, outputPath], { timeout: 120000, windowsHide: true })
         } else if (isMac) {
             const script = `tell application "Microsoft PowerPoint"\nset theDoc to open (POSIX file "${inputPath.replace(/"/g, '\\"')}")\nsave theDoc in (POSIX file "${outputPath.replace(/"/g, '\\"')}") as save as PDF\nclose theDoc saving no\nend tell`
             await execFileAsync("osascript", ["-e", script], { timeout: 60000 })
@@ -85,4 +89,16 @@ async function convertWithPowerPoint(inputPath: string, outputPath: string): Pro
         // PowerPoint not available or failed
     }
     return fs.existsSync(outputPath)
+}
+
+// Prebuilt Windows helper (see scripts/ppt-to-pdf-helper), null when not built.
+function getPptHelperPath(): string | null {
+    if (process.platform !== "win32") return null
+    try {
+        const helperPath = path.join(app.getAppPath(), "public", "assets", "bin", "ppt-to-pdf-helper.exe")
+        if (fs.existsSync(helperPath)) return helperPath
+    } catch {
+        // ignore
+    }
+    return null
 }
